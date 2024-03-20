@@ -25,31 +25,8 @@ conda env create -f environment.yml
 conda activate gspose
 ```
 
-# cd submodules/Connected_components_PyTorch
-# python setup.py install
-
-# cd ../diff-gaussian-rasterization
-# python setup.py install
-
-# cd ../simple-knn
-# python setup.py install
-# cd ../..
-
-```
-<!-- - Install the [3D Gaussian Splatting](https://github.com/graphdeco-inria/gaussian-splatting?tab=readme-ov-file) -->
-
-
-<!-- ## Dataset
-Our evaluation is conducted on three benchmark datasets all downloaded from [BOP website](https://bop.felk.cvut.cz/datasets). All three datasets are stored in the same directory, e.g. ``BOP_Dataset/tless, BOP_Dataset/ycbv, BOP_Dataset/itodd``, and set the "DATASET_ROOT" (in config.py) to the BOP_Dataset directory.
-
-## Denpendencies
-This project requires the evaluation code from [bop_toolkit](https://github.com/thodan/bop_toolkit). -->
-
 ## Pre-trained Model
 Download the [pretrained weights](https://drive.google.com/file/d/1VgOAemCrEeW_nT6qQ3R12oz_3UZmQILy/view?usp=sharing) and store it as ``checkpoints/model_wights.pth``.
-
-<!-- The pre-trained models can be downloaded [here](https://1drv.ms/u/s!AsQt5otkUsREavqKuyVqXeS0twA?e=pkyqow), all the models are saved to the ``checkpoints`` directory, for example, ``checkpoints/tless, checkpoints/ycbv, checkpoints/itodd``. -->
-
 
 ## Datasets
 (Training) We utilize a subset (``gso_1M``) of the MegaPose dataset for training.
@@ -97,7 +74,7 @@ Evaluation on the scanned objects of OnePose-LowTexture.
 - ``python training/training.py`` 
 
 ## Acknowledgement
-- 1. The code is partially based on [DINOv2](https://github.com/facebookresearch/dinov2), [3D Gaussian Splatting](https://github.com/graphdeco-inria/gaussian-splatting?tab=readme-ov-file), [MegaPose](https://github.com/megapose6d/megapose6d), [Gen6D](https://github.com/liuyuan-pal/Gen6D), and [SC6D](https://github.com/dingdingcai/SC6D-pose).
+- 1. The code is partially based on [DINOv2](https://github.com/facebookresearch/dinov2), [3D Gaussian Splatting](https://github.com/graphdeco-inria/gaussian-splatting?tab=readme-ov-file), [MegaPose](https://github.com/megapose6d/megapose6d), and [SC6D](https://github.com/dingdingcai/SC6D-pose).
 
 <!-- - 1. The code is partially based on [GDR-Net](https://github.com/THU-DA-6D-Pose-Group/GDR-Net) and [OVE6D](https://github.com/dingdingcai/OVE6D-pos) . -->
 
