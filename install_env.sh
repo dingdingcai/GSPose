@@ -1,3 +1,5 @@
+conda env create -f environment.yml
+conda activate gspose
 
 pip install torch==2.0.1+cu117 torchvision==0.15.2+cu117 -f https://download.pytorch.org/whl/torch_stable.html
 pip install "git+https://github.com/facebookresearch/pytorch3d.git"
@@ -15,3 +17,6 @@ python setup.py install
 cd ../../model/curope
 python setup.py install
 cd ../..
+
+ln -s /home/dingding/Workspace/CDD/GSPose_release/dataspace dataspace
+ln -s /home/dingding/Workspace/CDD/GSPose_release/checkpoints checkpoints
