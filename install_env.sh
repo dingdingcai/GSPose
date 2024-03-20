@@ -17,6 +17,3 @@ python setup.py install
 cd ../../model/curope
 python setup.py install
 cd ../..
-
-ln -s /home/dingding/Workspace/CDD/GSPose_release/dataspace dataspace
-ln -s /home/dingding/Workspace/CDD/GSPose_release/checkpoints checkpoints
