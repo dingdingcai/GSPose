@@ -1,6 +1,3 @@
-conda env create -f environment.yml
-conda activate gspose
-
 pip install torch==2.0.1+cu117 torchvision==0.15.2+cu117 -f https://download.pytorch.org/whl/torch_stable.html
 pip install "git+https://github.com/facebookresearch/pytorch3d.git"
 pip install xformers==0.0.22
