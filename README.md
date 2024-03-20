@@ -27,7 +27,6 @@ mamba activate gspose
 bash install_env.sh
 ```
 ## TODO
-- [ ] script for preparing the training dataset
 - [ ] inference examples in notebook
 
 ## Pre-trained Model
