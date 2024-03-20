@@ -19,8 +19,8 @@ Please start by installing [Miniconda3](https://conda.io/projects/conda/en/lates
 
 
 ``` Bash
-git clone https://github.com/dingdingcai/gs-pose.git --recursive
-cd gs-pose
+git clone git@github.com:dingdingcai/GSPose.git --recursive
+cd GSPose
 conda env create -f environment.yml
 conda activate gspose
 ```
