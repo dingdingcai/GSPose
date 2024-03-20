@@ -23,20 +23,18 @@ git clone https://github.com/dingdingcai/gs-pose.git --recursive
 cd gs-pose
 conda env create -f environment.yml
 conda activate gspose
-pip install torch==1.8.0+cu111 torchvision==0.9.0+cu111 -f https://download.pytorch.org/whl/torch_stable.html
-pip install "git+https://github.com/facebookresearch/pytorch3d.git"
-python -m pip install detectron2 -f https://dl.fbaipublicfiles.com/detectron2/wheels/cu111/torch1.8/index.html
+```
 
+# cd submodules/Connected_components_PyTorch
+# python setup.py install
 
-cd submodules/Connected_components_PyTorch
-python setup.py install
+# cd ../diff-gaussian-rasterization
+# python setup.py install
 
-cd ../diff-gaussian-rasterization
-python setup.py install
+# cd ../simple-knn
+# python setup.py install
+# cd ../..
 
-cd ../simple-knn
-python setup.py install
-cd ../..
 ```
 <!-- - Install the [3D Gaussian Splatting](https://github.com/graphdeco-inria/gaussian-splatting?tab=readme-ov-file) -->
 

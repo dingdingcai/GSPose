@@ -17,7 +17,6 @@ from torch.utils.tensorboard import SummaryWriter
 
 PROJ_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__))) # ./../../
 sys.path.append(PROJ_ROOT)
-DATASPACE_DIR = os.path.join(PROJ_ROOT, 'dataspace')
 
 from dataset import misc
 from misc_utils import warmup_lr
@@ -48,6 +47,8 @@ random_view_num = 24    # 8 + 24 = 32
 nnb_Rmat_threshold = 30
 num_train_iters = 100_000
 
+DATA_DIR = os.path.join(PROJ_ROOT, 'dataspace', 'MegaPose')
+
 dataset = Dataset(data_dir=DATA_DIR,
                   query_view_num=que_view_num,
                   refer_view_num=refer_view_num,
@@ -58,8 +59,6 @@ dataset = Dataset(data_dir=DATA_DIR,
 print('num_objects: ', len(dataset.selected_objIDs))
 
 model_net = ModelNet().to(device)
-
-DATA_DIR = os.path.join(DATASPACE_DIR, 'bop_dataset/MegaPose')
 CKPT_ROOT = os.path.join(PROJ_ROOT, 'checkpoints')
 checkpoints = os.path.join(CKPT_ROOT, 'checkpoints')
 tb_dir = os.path.join(checkpoints, 'tb')
