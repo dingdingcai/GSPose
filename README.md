@@ -23,6 +23,7 @@ git clone git@github.com:dingdingcai/GSPose.git --recursive
 cd GSPose
 conda env create -f environment.yml
 conda activate gspose
+bash install_env.sh
 ```
 
 ## Pre-trained Model
