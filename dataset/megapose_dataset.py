@@ -20,8 +20,6 @@ from misc_utils import gdr_utils
 
 logger = logging.getLogger(__name__)
 CUR_FILE_DIR = os.path.dirname(__file__)
-CUR_FILE_DIR = '/home/dingding/Workspace/CDD/CoSeg-Pose/dataset'
-
 class MegaPose_Dataset(torch.utils.data.Dataset):
     def __init__(self, 
                  data_dir,
