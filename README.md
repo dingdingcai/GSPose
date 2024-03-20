@@ -1,6 +1,5 @@
 # GS-Pose: Cascaded Framework for Generalizable Segmentation-based 6D Object Pose Estimation
-<!-- ## Source code for CF-Pose: Cascaded Framework for Generalizable 6D Pose Estimation from RGB Images -->
-<!-- # SC6D: Symmetry-agnostic and Correspondence-free 6D Object Pose Estimation (3DV 2022) -->
+
 - [Paper](https://arxiv.org/abs/2403.10683)
 <p align="center">
     <img src ="assets/gspose_overview.png" width="800" />
