@@ -5,12 +5,12 @@ channels:
   - defaults
   - xformers
 dependencies:
-  - python=3.8.5
+  - python==3.8.5
   - plyfile==0.8.1
-  - cudatoolkit=11.7
+  - cudatoolkit==11.7
   - pip:
-    - tqdm=4.66.2
     - mmcv==1.7.1
+    - tqdm==4.66.2
     - pillow==9.3.0
     - mediapy==1.1.4
     - open3d==0.16.0
