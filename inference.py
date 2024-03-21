@@ -1028,7 +1028,7 @@ if __name__ == "__main__":
     num_refer_views = args.num_refer_views
     enable_3DGO_model_based_database = args.use_model_based
 
-    output_dir = os.path.join(PROJ_ROOT, f'new_database', dataset_name)
+    output_dir = os.path.join(PROJ_ROOT, f'obj_database', dataset_name)
     
     outpose_dir = os.path.join(output_dir, args.outpose_dir + f'_{postfix}')
     database_dir = os.path.join(output_dir, args.database_dir + f'_{postfix}')

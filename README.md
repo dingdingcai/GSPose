@@ -21,8 +21,8 @@ This repository contains submodules, and the default environment can be installe
 ``` Bash
 git clone git@github.com:dingdingcai/GSPose.git --recursive
 cd GSPose
-mamba env create -f environment.yml
-mamba activate gspose
+conda env create -f environment.yml
+conda activate gspose
 
 bash install_env.sh
 ```
