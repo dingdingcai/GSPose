@@ -1,6 +1,6 @@
 [submodule "submodules/Connected_components_PyTorch"]
 	path = submodules/Connected_components_PyTorch
-	url = git@github.com:zsef123/Connected_components_PyTorch.git
+	url = https://github.com/zsef123/Connected_components_PyTorch.git
 [submodule "submodules/simple-knn"]
 	path = submodules/simple-knn
 	url = https://gitlab.inria.fr/bkerbl/simple-knn.git
