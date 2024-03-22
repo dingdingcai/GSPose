@@ -26,14 +26,18 @@ conda activate gspose
 
 bash install_env.sh
 ```
-## TODO
-- [ ] inference examples in notebook
 
 ## Pre-trained Model
 Download the [pretrained weights](https://drive.google.com/file/d/1VgOAemCrEeW_nT6qQ3R12oz_3UZmQILy/view?usp=sharing) and store it as ``checkpoints/model_wights.pth``.
 
-## Datasets
 
+
+## Demo Example
+An example of using GS-Pose for both pose estimation and tracking is provided in [``notebook``](./notebook/Demo_Example_with_GS-Pose.ipynb).  
+
+
+
+## Datasets
 Our evaluation is conducted on the LINEMOD and OnePose-LowTexture datasets. 
 - For comparison with Gen6D, download [``LINEMOD_Gen6D``](https://connecthkuhk-my.sharepoint.com/:f:/g/personal/yuanly_connect_hku_hk/EkWESLayIVdEov4YlVrRShQBkOVTJwgK0bjF7chFg2GrBg?e=Y8UpXu). 
 - For comparion with OnePose++, download [``lm``](https://bop.felk.cvut.cz/datasets) and the YOLOv5 detection results [``lm_yolo_detection``](https://zjueducn-my.sharepoint.com/:u:/g/personal/12121064_zju_edu_cn/EdodUdKGwHpCuvw3Cio5DYoBTntYLQuc7vNg9DkytWuJAQ?e=sAXp4B).
