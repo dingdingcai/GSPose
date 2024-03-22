@@ -27,7 +27,6 @@ MS_SSIM_METRIC = MS_SSIM(data_range=1, size_average=True, channel=3)
 
 PROJ_ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(PROJ_ROOT)
-print('PROJ_ROOT: ', PROJ_ROOT)
 
 from dataset import misc
 from misc_utils import gs_utils
@@ -60,7 +59,7 @@ gaussian_BG = torch.zeros((3), device=device)
 model_net = ModelNet().to(device)
 ckpt_file = os.path.join(PROJ_ROOT, 'checkpoints/model_weights.pth')
 model_net.load_state_dict(torch.load(ckpt_file, map_location=device))
-print('Pretrained weights are loaded from ', ckpt_file[30:])
+print('Pretrained weights are loaded from ', ckpt_file.split('/')[-1])
 model_net.eval()
 
 def create_reference_database_from_RGB_images(model_func, obj_dataset, device, save_pred_mask=False):    
