@@ -10,8 +10,7 @@ PROJ_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(PROJ_ROOT)
 
 from .blocks import PositionGetter
-from .position_encoding import RoPE2D
-from .position_encoding import PositionEncodingSine2D
+from .position_encoding import RoPE2D, PositionEncodingSine2D
 from .generalized_mean_pooling import GeM2D as GeMeanPool2d
 from .dino_layers import (MemEffSelfAttention,
                                 MemEffCrossAttention, 

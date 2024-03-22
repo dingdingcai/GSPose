@@ -2,6 +2,8 @@ import cv2
 import math
 import torch
 import numpy as np
+from transforms3d.axangles import axangle2mat
+
 
 @torch.jit.script
 def bbox_to_grid(bbox, in_size, out_size):
@@ -150,6 +152,10 @@ def zoom_in_and_crop_with_offset(image, K, t, radius, target_size=224, margin=0,
     distortation is preserved
     """
     unsqueeze = False
+    if isinstance(radius, float):
+        radius = torch.tensor(radius)
+    if isinstance(radius, np.ndarray):
+        radius = torch.from_numpy(radius).float()
     if isinstance(K, np.ndarray):
         K = torch.from_numpy(K).float()
     if isinstance(t, np.ndarray):
@@ -169,7 +175,7 @@ def zoom_in_and_crop_with_offset(image, K, t, radius, target_size=224, margin=0,
         image = image.permute(0, 3, 1, 2)
     
     cam_focal = K[:, :2, :2].max()
-    bbox_scale = 2 * (1 + margin) * cam_focal * radius / t[:, 2] 
+    bbox_scale = 2 * (1 + margin) * cam_focal * radius.to(K.device) / t[:, 2].to(K.device) 
     rescaling_factor = target_size / bbox_scale
     
     Smat = torch.eye(3, device=K.device)[None, ...].repeat(K.size(0), 1, 1)
@@ -369,5 +375,37 @@ def draw_3d_bounding_box(rgb_image, projected_bbox, color, linewidth=3):
     return image_with_bbox
 
 
+def egocentric_to_allocentric(ego_pose, cam_ray=(0, 0, 1.0)):
+    # Compute rotation between ray to object centroid and optical center ray
+    cam_ray = np.asarray(cam_ray)
+    assert(ego_pose.shape[-1] == 4), "ego_pose should be a 3x4 or 4x4 matrix"
+    trans = ego_pose[:3, 3]
+    obj_ray = trans.copy() / np.linalg.norm(trans)
+    angle = math.acos(cam_ray.dot(obj_ray))
+    # Rotate back by that amount
+    if angle > 0:
+        allo_pose = np.zeros((3, 4), dtype=ego_pose.dtype)
+        allo_pose[:3, 3] = trans
+        rot_mat = axangle2mat(axis=np.cross(cam_ray, obj_ray), angle=-angle)
+        allo_pose[:3, :3] = np.dot(rot_mat, ego_pose[:3, :3])
+    else:  # ego tp allo
+        allo_pose = ego_pose.copy()
+    return allo_pose
 
+def allocentric_to_egocentric(allo_pose, cam_ray=(0, 0, 1.0)):
+    # Compute rotation between ray to object centroid and optical center ray
+    cam_ray = np.asarray(cam_ray)
+    assert(allo_pose.shape[-1] == 4), "allo_pose should be a 3x4 or 4x4 matrix"
 
+    trans = allo_pose[:3, 3]
+    obj_ray = trans.copy() / np.linalg.norm(trans)
+    angle = math.acos(cam_ray.dot(obj_ray))
+    if angle > 0:
+        ego_pose = np.zeros((3, 4), dtype=allo_pose.dtype)
+        ego_pose[:3, 3] = trans
+        rot_mat = axangle2mat(axis=np.cross(cam_ray, obj_ray), angle=angle)
+        ego_pose[:3, :3] = np.dot(rot_mat, allo_pose[:3, :3])
+    else:  # allo to ego
+        ego_pose = allo_pose.copy()
+    return ego_pose
+    

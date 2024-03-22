@@ -10,10 +10,10 @@ from pytorch3d import io as py3d_io
 from pytorch3d import ops as py3d_ops
 from pytorch3d import transforms as py3d_transform
 
-from misc_utils import gdr_utils, gs_utils
-
 PROJ_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(PROJ_ROOT)
+from misc_utils import gs_utils
+
 DATASPACE_DIR = os.path.join(PROJ_ROOT, 'dataspace')
 
 SUBSET_LINEMOID_OBJECTS = {
@@ -207,7 +207,7 @@ class LINEMOD_Dataset_GEN6D(torch.utils.data.Dataset):
             self.image_paths.append(image_path)
 
             allo_pose = obj_pose.copy() 
-            allo_pose[:3, :3] = gdr_utils.egocentric_to_allocentric(allo_pose)[:3, :3]
+            allo_pose[:3, :3] = gs_utils.egocentric_to_allocentric(allo_pose)[:3, :3]
             self.allo_poses.append(allo_pose)
 
             self.image_IDs.append(image_ID)
@@ -432,7 +432,7 @@ class LINEMOD_Dataset_BOP(torch.utils.data.Dataset):
             self.image_paths.append(image_path)
 
             allo_pose = obj_pose.copy() 
-            allo_pose[:3, :3] = gdr_utils.egocentric_to_allocentric(allo_pose)[:3, :3]
+            allo_pose[:3, :3] = gs_utils.egocentric_to_allocentric(allo_pose)[:3, :3]
             self.allo_poses.append(allo_pose)
 
             self.image_IDs.append(image_ID)
@@ -595,7 +595,7 @@ class LOWTEXTUREVideo_Dataset(torch.utils.data.Dataset):
             obj_pose = gs_utils.read_numpy_data_from_txt(pose_path)
             self.poses.append(obj_pose)
             allo_pose = obj_pose.copy() 
-            allo_pose[:3, :3] = gdr_utils.egocentric_to_allocentric(allo_pose)[:3, :3]
+            allo_pose[:3, :3] = gs_utils.egocentric_to_allocentric(allo_pose)[:3, :3]
             self.allo_poses.append(allo_pose)
 
             self.image_IDs.append(frame_idx)
@@ -653,7 +653,7 @@ class LOWTEXTUREVideo_Dataset(torch.utils.data.Dataset):
         return new_batch
 
 
-class VideoTrack_Dataset(torch.utils.data.Dataset):
+class DemoObject_Dataset(torch.utils.data.Dataset):
     def __init__(self, data_root, obj_name, subset_mode='train', num_grid_points=4096, obj_database_dir=None, 
                  num_refer_views=-1, 
                  use_gt_mask=False,
@@ -706,7 +706,7 @@ class VideoTrack_Dataset(torch.utils.data.Dataset):
         except:
             self.camK = gs_utils.read_numpy_data_from_txt(intrinsic_path)
         
-        self.pose_dir = os.path.join(self.obj_seq_path, 'poses_ba')
+        self.pose_dir = os.path.join(self.obj_seq_path, 'poses')
         self.video_path = os.path.join(self.obj_seq_path, 'Frames.m4v')
         self.video_frames = media.read_video(self.video_path) # NxHxWx3    
         IMG_NUM, IMG_HEI, IMG_WID = self.video_frames.shape[:3]
@@ -720,7 +720,7 @@ class VideoTrack_Dataset(torch.utils.data.Dataset):
             obj_pose = gs_utils.read_numpy_data_from_txt(pose_path)
             self.poses.append(obj_pose)
             allo_pose = obj_pose.copy() 
-            allo_pose[:3, :3] = gdr_utils.egocentric_to_allocentric(allo_pose)[:3, :3]
+            allo_pose[:3, :3] = gs_utils.egocentric_to_allocentric(allo_pose)[:3, :3]
             self.allo_poses.append(allo_pose)
 
             self.image_IDs.append(frame_idx)
@@ -797,55 +797,7 @@ datasetCallbacks = {
                         'DATASETLOADER': LOWTEXTUREVideo_Dataset, 
                         'DATAROOT': os.path.join(DATASPACE_DIR, 'onepose_dataset/lowtexture_test_data'),
                         },
-
-    "VideoTrack": {'OBJECTS': TRACKING_OBJECTS, 
-                        'DATASETLOADER': VideoTrack_Dataset, 
-                        'DATAROOT': os.path.join(DATASPACE_DIR, 'onepose_dataset/lowtexture_test_data'),
-                        },                    
+              
 }
 
 
-
-
-"""
-tensorboard --logdir 0700-toyrobot-others-binamask/ --port 9009
-tensorboard --logdir 0701-yellowduck-others-binamask/ --port 9009
-# tensorboard --logdir 0702-sheep-others-binamask/ --port 9009
-tensorboard --logdir 0703-fakebanana-others-binamask/ --port 9009
-tensorboard --logdir 0706-teabox-box-binamask/ --port 9009
-tensorboard --logdir 0707-orange-others-binamask/ --port 9009
-tensorboard --logdir 0708-greenteapot-others-binamask/ --port 9009
-tensorboard --logdir 0710-lecreusetcup-others-binamask/ --port 9009
-tensorboard --logdir 0712-insta-others-binamask/ --port 9009
-tensorboard --logdir 0713-batterycharger-others-binamask/ --port 9009
-tensorboard --logdir 0714-catmodel-others-binamask/ --port 9009
-tensorboard --logdir 0715-logimouse-others-binamask/ --port 9009
-tensorboard --logdir 0718-goldtea-others-binamask/ --port 9009
-tensorboard --logdir 0719-yellowbluebox-box-binamask/ --port 9009
-tensorboard --logdir 0720-narcissustea-others-binamask/ --port 9009
-tensorboard --logdir 0721-camera-others-binamask/ --port 9009
-tensorboard --logdir 0722-ugreenbox-others-binamask/ --port 9009
-tensorboard --logdir 0723-headphonecontainer-others-binamask/ --port 9009
-# tensorboard --logdir 0724-vitamin-others-binamask/ --port 9009
-tensorboard --logdir 0725-airpods-others-binamask/ --port 9009
-tensorboard --logdir 0726-cup-others-binamask/ --port 9009
-tensorboard --logdir 0727-shiningscan-box-binamask/ --port 9009
-tensorboard --logdir 0728-sensenut-box-binamask/ --port 9009
-tensorboard --logdir 0729-flowertea-others-binamask/ --port 9009
-tensorboard --logdir 0730-blackcolumcontainer-others-binamask/ --port 9009
-tensorboard --logdir 0731-whitesonycontainer-others-binamask/ --port 9009
-tensorboard --logdir 0732-moliere-others-binamask/ --port 9009
-tensorboard --logdir 0733-mouse-others-binamask/ --port 9009
-tensorboard --logdir 0735-facecream-others-binamask/ --port 9009
-tensorboard --logdir 0736-david-others-binamask/ --port 9009
-tensorboard --logdir 0737-pelikancontainer-box-binamask/ --port 9009
-tensorboard --logdir 0740-marseille-others-binamask/ --port 9009
-tensorboard --logdir 0742-hikrobotbox-box-binamask/ --port 9009
-tensorboard --logdir 0743-blackcharger-others-binamask/ --port 9009
-tensorboard --logdir 0744-fan-others-binamask/ --port 9009
-tensorboard --logdir 0745-ape-others-binamask/ --port 9009
-tensorboard --logdir 0746-fakecam-others-binamask/ --port 9009
-tensorboard --logdir 0748-penboxvert-others-binamask/ --port 9009
-
-
-"""

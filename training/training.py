@@ -232,7 +232,7 @@ for iter_steps in range(1, max_steps+1):
                 os.makedirs(checkpoints)
             time_stamp = time.strftime('%m%d_%H%M%S', time.localtime())
 
-            ckpt_name = '{}_{}_{}.pth'.format(iter_steps, time_stamp)
+            ckpt_name = 'model_{}_{}.pth'.format(iter_steps, time_stamp)
             ckpt_file = os.path.join(checkpoints, ckpt_name) 
             try:
                 state = {

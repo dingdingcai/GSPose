@@ -1,6 +1,6 @@
 import os
 import torch
-gpu_id = 1
+gpu_id = 0
 os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 device = torch.device('cuda:0')
@@ -30,9 +30,9 @@ sys.path.append(PROJ_ROOT)
 print('PROJ_ROOT: ', PROJ_ROOT)
 
 from dataset import misc
+from misc_utils import gs_utils
 from misc_utils.metric_utils import *
 from config import inference_cfg as CFG
-from misc_utils import gdr_utils, gs_utils
 from model.network import model_arch as ModelNet
 from dataset.inference_datasets import datasetCallbacks
 from misc_utils.warmup_lr import CosineAnnealingWarmupRestarts
@@ -49,7 +49,7 @@ from gaussian_object.gaussian_render import render as GS_Renderer
 from gaussian_object.cameras import Camera as GS_Camera
 from gaussian_object.gaussian_model import GaussianModel
 from gaussian_object.arguments import ModelParams, PipelineParams, OptimizationParams
-from gaussian_object.build_3DGaussianObject import training as build_3DGaussianObject
+from gaussian_object.build_3DGaussianObject import create_3D_Gaussian_object
 
 parser = ArgumentParser()
 gaussian_ModelP = ModelParams(parser)
@@ -63,11 +63,12 @@ model_net.load_state_dict(torch.load(ckpt_file, map_location=device))
 print('Pretrained weights are loaded from ', ckpt_file[30:])
 model_net.eval()
 
-def create_reference_database_from_RGB_images(model_func, obj_dataset, device, save_pred_mask=False):
+def create_reference_database_from_RGB_images(model_func, obj_dataset, device, save_pred_mask=False):    
     if CFG.USE_ALLOCENTRIC:
         obj_poses = np.stack(obj_dataset.allo_poses, axis=0)
     else:
         obj_poses = np.stack(obj_dataset.poses, axis=0)
+
     obj_poses = torch.as_tensor(obj_poses, dtype=torch.float32).to(device)
     obj_matRs = obj_poses[:, :3, :3]
     # obj_vecRs = obj_matRs[:, 2, :3]
@@ -80,9 +81,10 @@ def create_reference_database_from_RGB_images(model_func, obj_dataset, device, s
     for ref_idx in fps_inds:
         view_idx = ref_idx.item()
         datum = obj_dataset[view_idx]
-        image = datum['image']    # HxWx3
         camK = datum['camK']      # 3x3
-        pose = datum['allo_pose'] # 4x4
+        image = datum['image']    # HxWx3
+        pose = datum.get('allo_pose', datum['pose']) # 4x4
+        
         ref_fps_images.append(image)
         ref_fps_poses.append(pose)
         ref_fps_camKs.append(camK)
@@ -113,15 +115,13 @@ def create_reference_database_from_RGB_images(model_func, obj_dataset, device, s
     num_instances = len(obj_dataset)
     for idx in range(num_instances):
         ref_data = obj_dataset[idx]
-        img_camK = ref_data['camK']
+        camK = ref_data['camK']
         image = ref_data['image']
-        pose = ref_data['allo_pose']        
+        pose = ref_data.get('allo_pose', ref_data['pose']) # 4x4
         refer_allo_Rs.append(pose[:3, :3])
-        obj_camK = torch.as_tensor(obj_dataset.camK, dtype=torch.float32) # global object(sequence)-wise camera intrinsics
-        ref_tz = (1 + CFG.zoom_image_margin) * obj_camK[:2, :2].max() * obj_dataset.bbox3d_diameter / CFG.zoom_image_scale
-        
+        ref_tz = (1 + CFG.zoom_image_margin) * camK[:2, :2].max() * obj_dataset.bbox3d_diameter / CFG.zoom_image_scale
         zoom_outp = gs_utils.zoom_in_and_crop_with_offset(image=image, # HxWx3 -> SxSx3
-                                                            K=img_camK, 
+                                                            K=camK, 
                                                             t=pose[:3, 3], 
                                                             radius=obj_dataset.bbox3d_diameter/2,
                                                             target_size=CFG.zoom_image_scale, 
@@ -136,10 +136,14 @@ def create_reference_database_from_RGB_images(model_func, obj_dataset, device, s
                                                         ref_mask=obj_fps_masks).sigmoid()
             y_Remb = model_func.generate_rotation_aware_embedding(zoom_feat, zoom_mask)
             refer_Remb_vectors.append(y_Remb.squeeze(0)) # 64
-            
-            msk_yy, msk_xx = torch.nonzero(zoom_mask.detach().cpu().squeeze().round().type(torch.uint8), as_tuple=True)
-            msk_cx = (msk_xx.max() + msk_xx.min()) / 2
-            msk_cy = (msk_yy.max() + msk_yy.min()) / 2
+            try:
+                msk_yy, msk_xx = torch.nonzero(zoom_mask.detach().cpu().squeeze().round().type(torch.uint8), as_tuple=True)
+                msk_cx = (msk_xx.max() + msk_xx.min()) / 2
+                msk_cy = (msk_yy.max() + msk_yy.min()) / 2
+            except: # no mask is found
+                msk_cx = CFG.zoom_image_scale / 2
+                msk_cy = CFG.zoom_image_scale / 2
+
             prob_mask_area = zoom_mask.detach().cpu().sum()
             bin_mask_area = zoom_mask.round().detach().cpu().sum()            
             refer_coseg_mask_info.append(torch.tensor([msk_cx, msk_cy, ref_tz, bin_mask_area, prob_mask_area]))
@@ -207,7 +211,7 @@ def perform_segmentation_and_encoding(model_func, que_image, ref_database, devic
             else:
                 break
         _, pd_coarse_tight_scales, pd_coarse_centers = misc.torch_find_connected_component(
-            que_binary_mask, include_supmask=CFG.CC_INCLUDE_SUPMASK, min_pixel_threshold=CFG.DINO_PATCH_SIZE**2, return_bbox=True)
+            que_binary_mask, include_supmask=CFG.CC_INCLUDE_SUPMASK, min_bbox_scale=CFG.DINO_PATCH_SIZE, return_bbox=True)
 
         pd_coarse_scales = pd_coarse_tight_scales * CFG.coarse_bbox_padding
         pd_coarse_bboxes = torch.stack([pd_coarse_centers[:, 0] - pd_coarse_scales / 2.0,
@@ -242,7 +246,7 @@ def perform_segmentation_and_encoding(model_func, que_image, ref_database, devic
             if CFG.cosim_topk > 0:
                 cosim_score = token_cosim.topk(dim=1, k=CFG.cosim_topk).values.mean(dim=-1).mean(dim=1)
             else:
-                cosim_score = token_cosim.mean(dim=-1).sum(dim=1) / roi_obj_mask.squeeze(-1).sum(dim=1)
+                cosim_score = token_cosim.mean(dim=-1).sum(dim=1) / (1 + roi_obj_mask.squeeze(-1).sum(dim=1))  # KxLxN -> KxL -> K 
             
             optim_index = cosim_score.argmax()
             rgb_box_scale = pd_coarse_scales[optim_index]
@@ -265,7 +269,7 @@ def perform_segmentation_and_encoding(model_func, que_image, ref_database, devic
                         break
 
             _, pd_fine_tight_scales, pd_fine_centers = misc.torch_find_connected_component(
-                fine_binary_mask, include_supmask=CFG.CC_INCLUDE_SUPMASK, min_pixel_threshold=CFG.DINO_PATCH_SIZE**2, return_bbox=True)
+                fine_binary_mask, include_supmask=CFG.CC_INCLUDE_SUPMASK, min_bbox_scale=CFG.DINO_PATCH_SIZE, return_bbox=True)
 
             fine_offset_center = (pd_fine_centers / CFG.zoom_image_scale - 0.5) * rgb_box_scale[None]
             fine_bbox_centers = rgb_box_center[None, :] + fine_offset_center
@@ -304,7 +308,7 @@ def perform_segmentation_and_encoding(model_func, que_image, ref_database, devic
                 if CFG.cosim_topk > 0:
                     cosim_score = token_cosim.topk(dim=1, k=CFG.cosim_topk).values.mean(dim=-1).mean(dim=1) # KxLxN -> KxTxN -> KxN -> K
                 else:
-                    cosim_score = token_cosim.mean(dim=-1).sum(dim=1) / roi_obj_mask.squeeze(-1).sum(dim=1) # KxLxN -> KxL -> K
+                    cosim_score = token_cosim.mean(dim=-1).sum(dim=1) / (1 + roi_obj_mask.squeeze(-1).sum(dim=1))  # KxLxN -> KxL -> K
                 
                 optim_index = cosim_score.argmax()
                 rgb_box_scale = fine_bbox_scales[optim_index]
@@ -410,7 +414,7 @@ def perform_segmentation_and_encoding_from_bbox(model_func, que_image, ref_datab
     }
 
 def multiple_initial_pose_inference(obj_data, ref_database, device):
-    camK = obj_data['obj_camK'].to(device).squeeze()
+    camK = obj_data['camK'].to(device).squeeze()
     obj_Remb = obj_data['obj_Remb'].to(device).squeeze()
     obj_mask = obj_data['rgb_mask'].to(device).squeeze()
     bbox_scale = obj_data['bbox_scale'].to(device).squeeze()
@@ -446,16 +450,16 @@ def multiple_initial_pose_inference(obj_data, ref_database, device):
     homo_pxpy = torch_F.pad(obj_Pxy, (0, 1), value=1) # Kx3
     init_Ts = torch.einsum('ij,kj->ki', torch.inverse(camK), homo_pxpy) * que_Tz.unsqueeze(1)
     
-    coseg_init_RTs = torch.eye(4)[None, :, :].repeat(init_Rs.shape[0], 1, 1) # Kx4x4
-    coseg_init_RTs[:, :3, :3] = init_Rs.detach().cpu()
-    coseg_init_RTs[:, :3, 3] = init_Ts.detach().cpu()
-    coseg_init_RTs = coseg_init_RTs.numpy()
+    init_RTs = torch.eye(4)[None, :, :].repeat(init_Rs.shape[0], 1, 1) # Kx4x4
+    init_RTs[:, :3, :3] = init_Rs.detach().cpu()
+    init_RTs[:, :3, 3] = init_Ts.detach().cpu()
+    init_RTs = init_RTs.numpy()
 
     if CFG.USE_ALLOCENTRIC:
-        for idx in range(coseg_init_RTs.shape[0]):
-            coseg_init_RTs[idx, :3, :4] = gdr_utils.allocentric_to_egocentric(coseg_init_RTs[idx, :3, :4])[:3, :4]
+        for idx in range(init_RTs.shape[0]):
+            init_RTs[idx, :3, :4] = gs_utils.allocentric_to_egocentric(init_RTs[idx, :3, :4])[:3, :4]
 
-    return coseg_init_RTs
+    return init_RTs
 
 def multiple_refine_pose_with_GS_refiner(obj_data, init_pose, gaussians, device):
     def GS_Refiner(image, mask, init_camera, gaussians, return_loss=False):
@@ -527,6 +531,7 @@ def multiple_refine_pose_with_GS_refiner(obj_data, init_pose, gaussians, device)
         return outp
 
     target_size = CFG.GS_RENDER_SIZE
+    camK = obj_data['camK'].clone().squeeze()
     bbox_center = obj_data['bbox_center']
     bbox_scale = obj_data['bbox_scale'] 
     image = obj_data['rgb_image']   # 3xSxS
@@ -535,7 +540,7 @@ def multiple_refine_pose_with_GS_refiner(obj_data, init_pose, gaussians, device)
         mask = mask.round()
     
     if CFG.APPLY_ZOOM_AND_CROP:
-        camK = obj_data['obj_camK'].clone().squeeze()
+        
         que_zoom_rescaling_factor = target_size / bbox_scale
         zoom_cam_fx = camK[0, 0] * que_zoom_rescaling_factor
         zoom_cam_fy = camK[1, 1] * que_zoom_rescaling_factor
@@ -545,7 +550,6 @@ def multiple_refine_pose_with_GS_refiner(obj_data, init_pose, gaussians, device)
         que_zoom_offsetY = -2 * (bbox_center[1] - camK[1, 2]) / bbox_scale
     else:
         img_scale = obj_data['img_scale']
-        camK = obj_data['img_camK'].clone().squeeze()
         que_zoom_rescaling_factor = target_size / img_scale
         zoom_cam_fx = camK[0, 0] * que_zoom_rescaling_factor
         zoom_cam_fy = camK[1, 1] * que_zoom_rescaling_factor
@@ -593,20 +597,24 @@ def multiple_refine_pose_with_GS_refiner(obj_data, init_pose, gaussians, device)
 
     return ret_outp
 
-def eval_CoSegPose(model_func, obj_dataset, ref_database_dir, output_pose_dir=None, save_pred_mask=False):  
-    ref_database_path = os.path.join(ref_database_dir, 'object_reference_database.pkl')
+def eval_GSPose(model_func, obj_dataset, ref_database_dir, output_pose_dir=None, save_pred_mask=False):  
+    ref_database_path = os.path.join(ref_database_dir, 'reference_database.pkl')
     with open(ref_database_path, 'rb') as df:
         reference_database = pickle.load(df)
     for _key, _val in reference_database.items():
-        reference_database[_key] = torch.as_tensor(_val, dtype=torch.float32).to(device)
+        if isinstance(_val, np.ndarray):
+            reference_database[_key] = torch.as_tensor(_val, dtype=torch.float32).to(device)
     print('load database from ', ref_database_path)
 
     if args.enable_GS_Refiner:
         assert(ref_database_dir is not None)
-        obj_gaussians = GaussianModel(sh_degree=3)
-        all_ply_dirs = glob.glob(os.path.join(f'{ref_database_dir}/point_cloud/iteration_*'))
-        gs_ply_dir = sorted(all_ply_dirs, key=lambda x: int(x.split('_')[-1]), reverse=True)[0]
-        gs_ply_path = f'{gs_ply_dir}/point_cloud.ply'
+        obj_gaussians = GaussianModel()
+        gs_ply_path = os.path.join(ref_database_dir, '3DGO_model.ply')
+
+        # all_ply_dirs = glob.glob(os.path.join(f'{ref_database_dir}/point_cloud/iteration_*'))
+        # gs_ply_dir = sorted(all_ply_dirs, key=lambda x: int(x.split('_')[-1]), reverse=True)[0]
+        # gs_ply_path = f'{gs_ply_dir}/point_cloud.ply'
+
         obj_gaussians.load_ply(gs_ply_path)
         print('load 3D-OGS model from ', gs_ply_path)
     
@@ -615,7 +623,6 @@ def eval_CoSegPose(model_func, obj_dataset, ref_database_dir, output_pose_dir=No
     log_file_f = open(os.path.join(output_pose_dir, 'log.txt'), 'w')
 
     num_que_views = len(obj_dataset)
-    obj_camK = obj_dataset.camK
     obj_name = obj_dataset.obj_name
     obj_diameter = obj_dataset.diameter
     is_symmetric = obj_dataset.is_symmetric
@@ -634,13 +641,11 @@ def eval_CoSegPose(model_func, obj_dataset, ref_database_dir, output_pose_dir=No
     for view_idx in range(num_que_views):
         start_timer = time.time()
         que_data = obj_dataset[view_idx]
+        camK = que_data['camK']
         gt_pose = que_data['pose'].numpy()
-        img_camK = que_data['camK']
         que_image = que_data['image']      # HxWx3
         que_image_ID = que_data['image_ID']
         que_hei, que_wid = que_image.shape[:2]
-        obj_camK = torch.as_tensor(obj_camK, dtype=torch.float32) # global object(sequence)-wise camera intrinsics
-
         try:
             if CFG.USE_YOLO_BBOX:
                 pd_bbox_center = que_data['bbox_center'].to(device)
@@ -669,8 +674,7 @@ def eval_CoSegPose(model_func, obj_dataset, ref_database_dir, output_pose_dir=No
 
                     rgb_crop = (obj_data['rgb_image'].detach().cpu().permute(1, 2, 0) * 255).numpy().astype(np.uint8)[:, :, ::-1]
                     cv2.imwrite(coseg_mask_path.replace('.png', '_rgb_yolo.png'), rgb_crop)
-            
-            elif CFG.APPLY_ZOOM_AND_CROP:
+            else:
                 raw_hei, raw_wid = que_image.shape[:2]
                 raw_long_size = max(raw_hei, raw_wid)
                 raw_short_size = min(raw_hei, raw_wid)
@@ -712,31 +716,8 @@ def eval_CoSegPose(model_func, obj_dataset, ref_database_dir, output_pose_dir=No
 
                     rgb_crop = (obj_data['rgb_image'].detach().cpu().squeeze().permute(1, 2, 0) * 255).numpy().astype(np.uint8)[:, :, ::-1]
                     cv2.imwrite(coseg_mask_path.replace('.png', '_rgb.png'), rgb_crop)
-            
-            else:
-                que_image = que_image[None, ...].permute(0, 3, 1, 2).to(device)
-                que_image = torch_F.interpolate(que_image, 
-                                                size=(CFG.zoom_image_scale, CFG.zoom_image_scale), 
-                                                mode='bilinear', align_corners=True)
-                
-                obj_data = perform_segmentation_and_encoding_from_bbox(model_func, 
-                                                                        que_image=que_image,
-                                                                        bbox_center=que_data['bbox_center'],
-                                                                        bbox_scale=que_data['bbox_scale'],
-                                                                        ref_database=reference_database,  
-                                                                        device=device)
-                if save_pred_mask:
-                    coseg_mask_path = que_data['coseg_mask_path']
-                    orig_mask = torch_F.interpolate(obj_data['rgb_mask'].squeeze()[None, None, ...], 
-                                                    size=(que_hei, que_wid), 
-                                                    mode='bilinear', align_corners=True)
-                    orig_mask = (orig_mask.detach().cpu().squeeze() * 255).numpy().astype(np.uint8) # HxW
-                    if not os.path.exists(os.path.dirname(coseg_mask_path)):
-                        os.makedirs(os.path.dirname(coseg_mask_path))
-                    cv2.imwrite(coseg_mask_path, orig_mask)
-
-            obj_data['obj_camK'] = obj_camK  # object sequence-wise camera intrinsics, e.g., a fixed camera intrinsics for all frames within a sequence
-            obj_data['img_camK'] = img_camK  # object frame-wise camera intrinsics, e.g., varied camera intrinsics for different frame within a sequence
+ 
+            obj_data['camK'] = camK  # object sequence-wise camera intrinsics, e.g., a fixed camera intrinsics for all frames within a sequence
             obj_data['img_scale'] = max(que_hei, que_wid)            
             
             initilizer_timer = time.time()
@@ -750,13 +731,9 @@ def eval_CoSegPose(model_func, obj_dataset, ref_database_dir, output_pose_dir=No
             if obj_data.get('fine_det_cost', None) is not None:
                 runtime_metrics['detector_cost'].append(obj_data['fine_det_cost'])
             
-
             if args.enable_GS_Refiner:
                 refiner_timer = time.time()
-                refiner_oupt = multiple_refine_pose_with_GS_refiner(obj_data, 
-                                                                init_pose=init_RTs, 
-                                                                gaussians=obj_gaussians,
-                                                                device=device)
+                refiner_oupt = multiple_refine_pose_with_GS_refiner(obj_data, init_pose=init_RTs, gaussians=obj_gaussians, device=device)
                 
                 refine_RT = refiner_oupt['gs3d_refined_RT']
                 refiner_cost = time.time() - refiner_timer
@@ -773,7 +750,7 @@ def eval_CoSegPose(model_func, obj_dataset, ref_database_dir, output_pose_dir=No
                         refine_metrics['ADD_metric'] = list()
                     refine_metrics['ADD_metric'].append(refine_add)
 
-                    refine_proj_err = calc_projection_2d_error(obj_pointcloud, refine_RT, gt_pose, img_camK)
+                    refine_proj_err = calc_projection_2d_error(obj_pointcloud, refine_RT, gt_pose, camK)
                     if 'Proj2D' not in refine_metrics.keys():
                         refine_metrics['Proj2D'] = list()
                     refine_metrics['Proj2D'].append(refine_proj_err)
@@ -783,10 +760,8 @@ def eval_CoSegPose(model_func, obj_dataset, ref_database_dir, output_pose_dir=No
         
         except Exception as e:
             print('Error in processing image {}: {}'.format(que_image_ID, e))
-            obj_data['obj_camK'] = obj_camK  # object sequence-wise camera intrinsics, e.g., a fixed camera intrinsics for all frames within a sequence
-            obj_data['img_camK'] = img_camK  # object frame-wise camera intrinsics, e.g., varied camera intrinsics for different frame within a sequence
-            obj_data['img_scale'] = max(que_hei, que_wid)
-            refine_RT = init_RT
+            init_RT = np.eye(4)
+            refine_RT = np.eye(4)
             
         
         init_Rerr, init_Terr = calc_pose_error(init_RT, gt_pose)
@@ -800,7 +775,7 @@ def eval_CoSegPose(model_func, obj_dataset, ref_database_dir, output_pose_dir=No
                 init_metrics['ADD_metric'] = list()
             init_metrics['ADD_metric'].append(init_add)
 
-            init_proj_err = calc_projection_2d_error(obj_pointcloud, init_RT, gt_pose, img_camK)
+            init_proj_err = calc_projection_2d_error(obj_pointcloud, init_RT, gt_pose, camK)
             if 'Proj2D' not in init_metrics.keys():
                 init_metrics['Proj2D'] = list()
             init_metrics['Proj2D'].append(init_proj_err)
@@ -886,98 +861,358 @@ def eval_CoSegPose(model_func, obj_dataset, ref_database_dir, output_pose_dir=No
     log_file_f.close()
     return {'init': init_results, 'refine': refine_results}
 
-def create_reference_database_from_OGS_model(model_func, gs_ply_path, focal_len, ref_tz, device):
-    target_image = torch.zeros(3, CFG.zoom_image_scale, CFG.zoom_image_scale, dtype=torch.float32, device=device)
-    obj_gaussians = GaussianModel(sh_degree=3, Rdim=CFG.SO3_DIM)
-    obj_gaussians.load_ply(gs_ply_path)
-    rend_FovX = focal2fov(focal_len, CFG.zoom_image_scale)
-    rend_FovY = focal2fov(focal_len, CFG.zoom_image_scale)
 
-    canonical_T = np.zeros(3)
-    canonical_T[-1] = ref_tz
-    uniform_Rz = misc.uniform_z_rotation(CFG.SO3_RZ_SAMPLES) # Sx3x3
-    uniform_Rxy_samples = misc.evenly_distributed_rotation(CFG.SO3_RXY_SAMPLES, random_seed=CFG.RANDOM_SEED) # Sx3x3
-    refer_R_samples = (uniform_Rz.unsqueeze(1) @ uniform_Rxy_samples.unsqueeze(0)).view(-1, 3, 3) # Rx3x3
-    if CFG.HEMI_ONLY:
-        upper_hemi = refer_R_samples[:, 2, 2] <= 0 # the upper hemisphere only
-        hemi_R_samples = refer_R_samples[upper_hemi]
-        refer_R_samples = hemi_R_samples
-    R_fps_inds = py3d_ops.sample_farthest_points(
-        py3d_transform.matrix_to_axis_angle(refer_R_samples)[None, :, :], 
-        K=CFG.refer_view_num, random_start_point=False)[1].squeeze(0)  # obtain the FPS indices
+def render_Gaussian_object_model(obj_gaussians, camK, pose, img_hei, img_wid, device): 
+    if isinstance(pose, torch.Tensor):
+        pose = pose.numpy()
+    obj_gaussians.initialize_pose()
+    FovX = focal2fov(camK[0, 0], img_wid)
+    FovY = focal2fov(camK[1, 1], img_hei)
+    target_image = torch.zeros((3, img_hei, img_wid)).to(device)
+    gs_camera = GS_Camera(T=pose[:3, 3],
+                          R=pose[:3, :3].T, 
+                          FoVx=FovX, FoVy=FovY,
+                          cx_offset=0, cy_offset=0,
+                          image=target_image, colmap_id=0, uid=0, image_name='', 
+                          gt_alpha_mask=None, data_device=device)    
+    render_img = GS_Renderer(gs_camera, obj_gaussians, gaussian_PipeP, gaussian_BG)['render']
+    render_img_np = render_img.permute(1, 2, 0).detach().cpu().numpy()
+    render_img_np = (render_img_np * 255).astype(np.uint8)
+    
+    return render_img_np
 
-    refer_Remb_vectors = list()
-    refer_coseg_mask_info = list()
-    refer_fps_dino_tokens = list()
-    refer_obj_fps_feats = list()
-    refer_obj_fps_masks = list()
 
+def GS_Tracker(model_func, ref_database, frame, camK, prev_pose):
+    zoom_outp = gs_utils.zoom_in_and_crop_with_offset(image=frame, K=camK, 
+                                                        t=prev_pose[:3, 3],
+                                                        radius=ref_database['bbox3d_diameter']/2,
+                                                        target_size=CFG.zoom_image_scale, 
+                                                        margin=CFG.zoom_image_margin)                
+    zoom_camK = zoom_outp['zoom_camK']      
+    zoom_image = zoom_outp['zoom_image']
+    bbox_scale = zoom_outp['bbox_scale']   
+    bbox_center = zoom_outp['bbox_center']
+    zoom_offset = zoom_outp['zoom_offset']
+    zoom_offsetX = zoom_offset[0]
+    zoom_offsetY = zoom_offset[1]
+    
+    zoom_FovX = focal2fov(zoom_camK[0, 0], CFG.zoom_image_scale)
+    zoom_FovY = focal2fov(zoom_camK[1, 1], CFG.zoom_image_scale)
+    target_image = zoom_image.permute(2, 0, 1).to(device) # 3xSxS
+
+    fg_trunc_mask = (target_image.sum(dim=0, keepdim=True) > 0).type(torch.float32) # 1xSxS
+    
     with torch.no_grad():
-        fps_rgb_imgs = list()
-        fps_Rmat = refer_R_samples[R_fps_inds]
-        for Rind, Rmat in enumerate(fps_Rmat):
-            gs_camera = GS_Camera(T=canonical_T, R=Rmat.numpy().T, 
-                                    FoVx=rend_FovX, FoVy=rend_FovY, cx_offset=0, cy_offset=0,
-                                    image=target_image, colmap_id=0, uid=0, image_name='', gt_alpha_mask=None, data_device=device)
-            rend_img = GS_Renderer(gs_camera, obj_gaussians, gaussian_PipeP, gaussian_BG)['render'] # 3xSxS
-            fps_rgb_imgs.append(rend_img)
-        fps_rgb_imgs = torch.stack(fps_rgb_imgs, dim=0) # Kx3xSxS
-        refer_obj_fps_feats, _, refer_fps_dino_tokens = model_func.extract_DINOv2_feature(fps_rgb_imgs, return_last_dino_feat=True) # Kx3xSxS -> KxLxC
-        refer_obj_fps_masks = model_func.refer_cosegmentation(refer_obj_fps_feats).sigmoid() # Kx1xSxS
-        obj_token_masks = torch_F.interpolate(refer_obj_fps_masks, scale_factor=1.0/model_func.dino_patch_size, 
-                                                mode='bilinear', align_corners=True, recompute_scale_factor=True) # Kx1xPxP
-        refer_fps_dino_tokens = refer_fps_dino_tokens.flatten(0, 1)[obj_token_masks.view(-1).round().type(torch.bool), :] # KxLxC -> KLxC -> MxC
+        target_mask = model_func.query_cosegmentation(
+            model_func.extract_DINOv2_feature(target_image[None]), 
+            x_ref=ref_database['obj_fps_feats'], ref_mask=ref_database['obj_fps_masks'],
+        ).sigmoid().squeeze(0)
+
+    zoom_image_np = (target_image.detach().cpu().permute(1, 2, 0) * 255).numpy().astype(np.uint8)
+    
+    obj_gaussians = ref_database['obj_gaussians']
+    track_camera = GS_Camera(T=prev_pose[:3, 3],
+                            R=prev_pose[:3, :3].T, 
+                            FoVx=zoom_FovX, FoVy=zoom_FovY,
+                            cx_offset=zoom_offsetX, cy_offset=zoom_offsetY,
+                            image=target_image, colmap_id=0, uid=0, image_name='', 
+                            gt_alpha_mask=None, data_device=device)
+
+    obj_gaussians.initialize_pose()
+    
+    optimizer = optim.AdamW([obj_gaussians._delta_R, obj_gaussians._delta_T])
+
+    lr_scheduler = CosineAnnealingWarmupRestarts(optimizer, 
+                                                 CFG.MAX_STEPS, 
+                                                 warmup_steps=CFG.WARMUP, 
+                                                 max_lr=CFG.START_LR, min_lr=CFG.END_LR)
+    losses = list()
+    target_image *= target_mask
+    for iter_step in range(CFG.MAX_STEPS):
+        optimizer.zero_grad()
+        render_img = GS_Renderer(track_camera, obj_gaussians, gaussian_PipeP, gaussian_BG)['render'] * fg_trunc_mask
+        loss = 0
         
-        for Rind, Rmat in enumerate(refer_R_samples):
-            if (Rind + 1) % 1000 == 0:
-                print('generate reference entries: {}/{}'.format(Rind+1, refer_R_samples.shape[0]))
-            gs_camera = GS_Camera(T=canonical_T, R=Rmat.numpy().T, 
-                                    FoVx=rend_FovX, FoVy=rend_FovY,
-                                    cx_offset=0, cy_offset=0,
-                                    image=target_image, colmap_id=0, uid=0, image_name='', 
-                                    gt_alpha_mask=None, data_device=device)
-            rend_img = GS_Renderer(gs_camera, obj_gaussians, gaussian_PipeP, gaussian_BG)['render'] # 3xSxS
-            rend_feat = model_func.extract_DINOv2_feature(rend_img.unsqueeze(0))
-            rend_mask = model_func.query_cosegmentation(rend_feat, x_ref=refer_obj_fps_feats, ref_mask=refer_obj_fps_masks).sigmoid()
-            rend_Remb = model_func.generate_rotation_aware_embedding(rend_feat, rend_mask)
-            refer_Remb_vectors.append(rend_Remb.squeeze(0)) # 64
-
-            msk_yy, msk_xx = torch.nonzero(rend_mask.detach().cpu().squeeze().round().type(torch.uint8), as_tuple=True)
-            msk_cx = (msk_xx.max() + msk_xx.min()) / 2
-            msk_cy = (msk_yy.max() + msk_yy.min()) / 2
-            mask_prob_area = rend_mask.sum().detach().cpu()
-            mask_bin_area = rend_mask.round().sum().detach().cpu()
-            refer_coseg_mask_info.append(torch.tensor([msk_cx, msk_cy, ref_tz, mask_bin_area, mask_prob_area]))
-
-    refer_Remb_vectors = torch.stack(refer_Remb_vectors, dim=0)       # Nx64
-    refer_coseg_mask_info = torch.stack(refer_coseg_mask_info, dim=0) # Nx5
-
-    ref_database = dict()
-    ref_database['obj_fps_inds'] = R_fps_inds
-    ref_database['obj_fps_images'] = fps_rgb_imgs
-
-    ref_database['obj_fps_feats'] = refer_obj_fps_feats
-    ref_database['obj_fps_masks'] = refer_obj_fps_masks
-    ref_database['obj_fps_dino_tokens'] = refer_fps_dino_tokens
-
-    ref_database['refer_allo_Rs'] = refer_R_samples
-    ref_database['refer_Remb_vectors'] = refer_Remb_vectors
-    ref_database['refer_coseg_mask_info'] = refer_coseg_mask_info
-
-    # # Save dictionary to a file
-    # saved_database_path = os.path.join(ref_database_dir, 'object_reference_database.pkl')
-    # if not os.path.exists(os.path.dirname(saved_database_path)):
-    #     os.makedirs(os.path.dirname(saved_database_path))
-
-    # for _key, _val in ref_database.items():
-    #     ref_database[_key] = _val.detach().cpu().numpy()
+        rgb_loss = L1Loss(render_img, target_image)
+        loss += rgb_loss
     
-    # with open(saved_database_path, 'wb') as df:
-    #     pickle.dump(ref_database, df)
+        ssim_loss = 1 - SSIM_METRIC(render_img[None], target_image[None])
+        loss += ssim_loss
+        
+        loss.backward()
+        optimizer.step()
+        lr_scheduler.step()
+        
+        losses.append(loss.item())
+        if iter_step >= CFG.EARLY_STOP_MIN_STEPS:
+            loss_grads = (torch.as_tensor(losses)[1:] - torch.as_tensor(losses)[:-1]).abs()
+            loss_grad = loss_grads[-CFG.EARLY_STOP_MIN_STEPS:].mean() 
+            if loss_grad < CFG.EARLY_STOP_LOSS_GRAD_NORM:
+                break
     
-    # print('save database to ', saved_database_path)
+    gs3d_delta_RT = obj_gaussians.get_delta_pose.squeeze(0).detach().cpu().numpy()
+    curr_pose = prev_pose @ gs3d_delta_RT
+        
+    return{
+        'track_pose': curr_pose,
+        'render_img': render_img,
+        'bbox_scale': bbox_scale,
+        'bbox_center': bbox_center,
+        'iter_step': iter_step,
+    }
 
-    return ref_database
+def eval_GSPose_with_database(model_func, obj_dataset, reference_database, output_pose_dir=None, save_pred_mask=False):  
+    gs_ply_path = reference_database['obj_gaussians_path']
+    obj_gaussians = GaussianModel()
+    obj_gaussians.load_ply(gs_ply_path)
+
+    for _key, _val in reference_database.items():
+        if isinstance(_val, np.ndarray):
+            reference_database[_key] = torch.as_tensor(_val, dtype=torch.float32).to(device)
+    
+    if not os.path.exists(output_pose_dir):
+        os.makedirs(output_pose_dir)
+    log_file_f = open(os.path.join(output_pose_dir, 'log.txt'), 'w')
+
+    num_que_views = len(obj_dataset)
+    obj_name = obj_dataset.obj_name
+    obj_diameter = obj_dataset.diameter
+    is_symmetric = obj_dataset.is_symmetric
+    obj_pointcloud = obj_dataset.obj_pointcloud
+    
+    name_info_log = 'name: {}, is_symmetric: {}, diameter: {:.4f} m, obj_pcd:{}'.format(
+                    obj_name, is_symmetric, obj_diameter, obj_pointcloud.shape)
+    
+    log_file_f.write(name_info_log + '\n')
+    print(name_info_log)
+
+    runtime_metrics = {'detector_cost': list(), 'initilizer_cost': list(), 'refiner_cost': list()}
+
+    init_metrics = {'image_IDs': list(), 'R_errs': list(), 't_errs': list()}
+    refine_metrics = {'image_IDs': list(), 'R_errs': list(), 't_errs': list()}
+    for view_idx in range(num_que_views):
+        start_timer = time.time()
+        que_data = obj_dataset[view_idx]
+        camK = que_data['camK']
+        gt_pose = que_data['pose'].numpy()
+        que_image = que_data['image']      # HxWx3
+        que_image_ID = que_data['image_ID']
+        que_hei, que_wid = que_image.shape[:2]
+        try:
+            if CFG.USE_YOLO_BBOX:
+                pd_bbox_center = que_data['bbox_center'].to(device)
+                pd_bbox_scale = que_data['bbox_scale'].to(device) * CFG.coarse_bbox_padding
+                pd_bbox = torch.stack([pd_bbox_center[0] - pd_bbox_scale / 2.0,
+                                        pd_bbox_center[1] - pd_bbox_scale / 2.0,
+                                        pd_bbox_center[0] + pd_bbox_scale / 2.0,
+                                        pd_bbox_center[1] + pd_bbox_scale / 2.0], dim=-1) # 4
+                que_roi_image = roi_align(que_image[None, ...].permute(0, 3, 1, 2).to(device), 
+                                        boxes=[pd_bbox[None, :]], output_size=(CFG.zoom_image_scale, CFG.zoom_image_scale), 
+                                        sampling_ratio=4) # 1x3xHxW -> Mx3xSxS
+                obj_data = perform_segmentation_and_encoding_from_bbox(
+                    model_func, que_image=que_roi_image, ref_database=reference_database, device=device)
+                obj_data['bbox_scale'] = pd_bbox_scale
+                obj_data['bbox_center'] = pd_bbox_center
+                if save_pred_mask:
+                    coseg_mask_path = que_data['coseg_mask_path']
+                    orig_mask = gs_utils.zoom_out_and_uncrop_image(obj_data['rgb_mask'].squeeze(),
+                                                                    bbox_center=pd_bbox_center,
+                                                                    bbox_scale=pd_bbox_scale,
+                                                                    orig_hei=que_hei, orig_wid=que_wid) # 1xHxWx1
+                    orig_mask = (orig_mask.detach().cpu().squeeze() * 255).numpy().astype(np.uint8) # HxW
+                    if not os.path.exists(os.path.dirname(coseg_mask_path)):
+                        os.makedirs(os.path.dirname(coseg_mask_path))
+                    cv2.imwrite(coseg_mask_path, orig_mask)
+
+                    rgb_crop = (obj_data['rgb_image'].detach().cpu().permute(1, 2, 0) * 255).numpy().astype(np.uint8)[:, :, ::-1]
+                    cv2.imwrite(coseg_mask_path.replace('.png', '_rgb_yolo.png'), rgb_crop)
+            else:
+                raw_hei, raw_wid = que_image.shape[:2]
+                raw_long_size = max(raw_hei, raw_wid)
+                raw_short_size = min(raw_hei, raw_wid)
+                raw_aspect_ratio = raw_short_size / raw_long_size
+                if raw_hei < raw_wid:
+                    new_wid = CFG.query_longside_scale
+                    new_hei = int(new_wid * raw_aspect_ratio)
+                else:
+                    new_hei = CFG.query_longside_scale
+                    new_wid = int(new_hei * raw_aspect_ratio)
+                query_rescaling_factor = CFG.query_longside_scale / raw_long_size
+                que_image = que_image[None, ...].permute(0, 3, 1, 2).to(device)
+                que_image = torch_F.interpolate(que_image, size=(new_hei, new_wid), mode='bilinear', align_corners=True)
+                
+                # obj_data = naive_perform_segmentation_and_encoding(model_func, 
+                                                                    # device=device,
+                                                                    # que_image=que_image,
+                                                                    # ref_database=reference_database)
+                
+                obj_data = perform_segmentation_and_encoding(model_func, 
+                                                            device=device,
+                                                            que_image=que_image,
+                                                            ref_database=reference_database)
+                
+                obj_data['bbox_scale'] /= query_rescaling_factor  # back to the original image scale
+                obj_data['bbox_center'] /= query_rescaling_factor # back to the original image scale
+                
+                if save_pred_mask:
+                    coseg_mask_path = que_data['coseg_mask_path']
+                    orig_mask = gs_utils.zoom_out_and_uncrop_image(obj_data['rgb_mask'].squeeze(),
+                                                                            bbox_center=obj_data['bbox_center'],
+                                                                            bbox_scale=obj_data['bbox_scale'],
+                                                                            orig_hei=que_hei,
+                                                                            orig_wid=que_wid) # 1xHxWx1
+                    orig_mask = (orig_mask.detach().cpu().squeeze() * 255).numpy().astype(np.uint8) # HxW
+                    if not os.path.exists(os.path.dirname(coseg_mask_path)):
+                        os.makedirs(os.path.dirname(coseg_mask_path))
+                    cv2.imwrite(coseg_mask_path, orig_mask)
+
+                    rgb_crop = (obj_data['rgb_image'].detach().cpu().squeeze().permute(1, 2, 0) * 255).numpy().astype(np.uint8)[:, :, ::-1]
+                    cv2.imwrite(coseg_mask_path.replace('.png', '_rgb.png'), rgb_crop)
+ 
+            obj_data['camK'] = camK  # object sequence-wise camera intrinsics, e.g., a fixed camera intrinsics for all frames within a sequence
+            obj_data['img_scale'] = max(que_hei, que_wid)            
+            
+            initilizer_timer = time.time()
+            init_RTs = multiple_initial_pose_inference(obj_data=obj_data, ref_database=reference_database, device=device)
+            init_RT = init_RTs[0]
+
+            if obj_data.get('RAEncoder_cost', None) is not None:
+                initilizer_cost = time.time() - initilizer_timer + obj_data['RAEncoder_cost']
+                runtime_metrics['initilizer_cost'].append(initilizer_cost)
+
+            if obj_data.get('fine_det_cost', None) is not None:
+                runtime_metrics['detector_cost'].append(obj_data['fine_det_cost'])
+            
+            if args.enable_GS_Refiner:
+                refiner_timer = time.time()
+                refiner_oupt = multiple_refine_pose_with_GS_refiner(obj_data, init_pose=init_RTs, gaussians=obj_gaussians, device=device)
+                
+                refine_RT = refiner_oupt['gs3d_refined_RT']
+                refiner_cost = time.time() - refiner_timer
+                runtime_metrics['refiner_cost'].append(refiner_cost)
+
+                refine_Rerr, refine_Terr = calc_pose_error(refine_RT, gt_pose)
+                refine_metrics['R_errs'].append(refine_Rerr)
+                refine_metrics['t_errs'].append(refine_Terr)
+                refine_metrics['image_IDs'].append(que_image_ID)
+                try:
+                    refine_add = calc_add_metric(obj_pointcloud, obj_diameter, refine_RT, gt_pose, syn=is_symmetric)
+
+                    if 'ADD_metric' not in refine_metrics.keys():
+                        refine_metrics['ADD_metric'] = list()
+                    refine_metrics['ADD_metric'].append(refine_add)
+
+                    refine_proj_err = calc_projection_2d_error(obj_pointcloud, refine_RT, gt_pose, camK)
+                    if 'Proj2D' not in refine_metrics.keys():
+                        refine_metrics['Proj2D'] = list()
+                    refine_metrics['Proj2D'].append(refine_proj_err)
+
+                except:
+                    pass
+        
+        except Exception as e:
+            print('Error in processing image {}: {}'.format(que_image_ID, e))
+            init_RT = np.eye(4)
+            refine_RT = np.eye(4)
+            
+        
+        init_Rerr, init_Terr = calc_pose_error(init_RT, gt_pose)
+        init_metrics['R_errs'].append(init_Rerr)
+        init_metrics['t_errs'].append(init_Terr)
+        init_metrics['image_IDs'].append(que_image_ID)
+
+        try:
+            init_add = calc_add_metric(obj_pointcloud, obj_diameter, init_RT, gt_pose, syn=is_symmetric)
+            if 'ADD_metric' not in init_metrics.keys():
+                init_metrics['ADD_metric'] = list()
+            init_metrics['ADD_metric'].append(init_add)
+
+            init_proj_err = calc_projection_2d_error(obj_pointcloud, init_RT, gt_pose, camK)
+            if 'Proj2D' not in init_metrics.keys():
+                init_metrics['Proj2D'] = list()
+            init_metrics['Proj2D'].append(init_proj_err)
+        except:
+            pass
+
+        if output_pose_dir is not None:
+            coseg_pose_txt = os.path.join(output_pose_dir, 'coseg_init_pose', f'{que_image_ID}.txt')
+            if not os.path.exists(os.path.dirname(coseg_pose_txt)):
+                os.makedirs(os.path.dirname(coseg_pose_txt))
+            np.savetxt(coseg_pose_txt, init_RT.tolist())
+
+            if args.enable_GS_Refiner:
+                refined_pose_txt = os.path.join(output_pose_dir, 'gs3d_refine_pose', f'{que_image_ID}.txt')
+                if not os.path.exists(os.path.dirname(refined_pose_txt)):
+                    os.makedirs(os.path.dirname(refined_pose_txt))
+                np.savetxt(refined_pose_txt, refine_RT.tolist())
+
+        if (view_idx + 1) % 100 == 0 or (view_idx + 1) == num_que_views:
+            time_stamp = time.strftime('%d-%H:%M:%S', time.localtime())
+
+            init_log_str = ''
+            init_results = aggregate_metrics(init_metrics)
+            for _key, _val in init_results.items():
+                init_log_str += ' {}:{:.2f},'.format(_key, _val*100)
+            init_log_str = init_log_str[1:-1]
+
+            refine_log_str = ''
+            refine_results = aggregate_metrics(refine_metrics)
+            for _key, _val in refine_results.items():
+                refine_log_str += ' {}:{:.2f},'.format(_key, _val*100)
+            refine_log_str = refine_log_str[1:-1]
+            print('[{}/{}], init=[{}], refine=[{}], {}'.format(view_idx+1, num_que_views, init_log_str, refine_log_str, time_stamp))
+
+            # print the runtime metrics
+            det_cost = 0
+            init_cost = 0
+            refine_cost = 0
+            if len(runtime_metrics['detector_cost']) > 0:
+                det_cost = np.array(runtime_metrics['detector_cost']).mean()
+            if len(runtime_metrics['initilizer_cost']) > 0:
+                init_cost = np.array(runtime_metrics['initilizer_cost']).mean()
+            if len(runtime_metrics['refiner_cost']) > 0:
+                refine_cost = np.array(runtime_metrics['refiner_cost']).mean()
+            total_cost = det_cost + init_cost + refine_cost
+            log_runtime = 'detector_cost: {:.4f}, initilizer_cost: {:.4f}, refiner_cost: {:.4f}, total_cost: {:.4f}'.format(det_cost, init_cost, refine_cost, total_cost)
+            print('[{}/{}], {}'.format(view_idx+1, num_que_views, log_runtime))
+
+            log_file_f.write('[{}/{}], init=[{}], refine=[{}], {}, {}\n'.format(view_idx+1, num_que_views, init_log_str, refine_log_str, time_stamp, log_runtime))
+            
+    time_stamp = time.strftime('%d-%H:%M:%S', time.localtime())
+
+    init_log_str = ''
+    init_results = aggregate_metrics(init_metrics)
+    for _key, _val in init_results.items():
+        init_log_str += ' {}:{:.2f},'.format(_key, _val*100)
+    init_log_str = init_log_str[1:-1]
+
+    refine_log_str = ''
+    refine_results = aggregate_metrics(refine_metrics)
+    for _key, _val in refine_results.items():
+        refine_log_str += ' {}:{:.2f},'.format(_key, _val*100)
+    refine_log_str = refine_log_str[1:-1]
+    print('{}, init=[{}], refine=[{}], {}'.format(obj_name, init_log_str, refine_log_str, time_stamp))
+    
+    init_pose_summary_path = os.path.join(output_pose_dir, 'coseg_init_pose_summary.txt')
+    with open(init_pose_summary_path, 'w') as f:
+        f.write('### image_id, R_err(˚), t_err(cm) {} \n'.format(init_results))
+        for idx, img_ID in enumerate(init_metrics['image_IDs']):
+            f.write('{}, {:.4f}, {:.4f} \n'.format(
+                img_ID, init_metrics['R_errs'][idx], init_metrics['t_errs'][idx])
+            )
+    
+    if args.enable_GS_Refiner:
+        refine_pose_summary_path = os.path.join(output_pose_dir, 'gs3d_refine_pose_summary.txt')
+        with open(refine_pose_summary_path, 'w') as f:
+            f.write('### image_id, R_err(˚), t_err(cm) {} \n'.format(refine_results))
+            for idx, img_ID in enumerate(refine_metrics['image_IDs']):
+                f.write('{}, {:.4f}, {:.4f} \n'.format(
+                    img_ID, refine_metrics['R_errs'][idx], refine_metrics['t_errs'][idx])
+                )
+    
+    log_file_f.close()
+    return {'init': init_results, 'refine': refine_results}
+
 
 
 if __name__ == "__main__":
@@ -994,8 +1229,8 @@ if __name__ == "__main__":
     parser.add_argument('--port', type=int, default=6009)
     parser.add_argument('--debug_from', type=int, default=-1)
     parser.add_argument('--detect_anomaly', action='store_true', default=False)
-    parser.add_argument("--test_iterations", nargs="+", type=int, default=[7_000, 30_000])
-    parser.add_argument("--save_iterations", nargs="+", type=int, default=[7_000, 30_000])
+    parser.add_argument("--test_iterations", nargs="+", type=int, default=[30_000])
+    parser.add_argument("--save_iterations", nargs="+", type=int, default=[30_000])
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
     parser.add_argument("--start_checkpoint", type=str, default = None)
@@ -1059,34 +1294,24 @@ if __name__ == "__main__":
     summarized_results = dict()
     for obj_name, obj_dir_name in datasetObjects.items():
         obj_refer_database_dir = os.path.join(database_dir, obj_name)
-        obj_ref_database_path = os.path.join(obj_refer_database_dir, 'object_reference_database.pkl') 
+        obj_ref_database_path = os.path.join(obj_refer_database_dir, 'reference_database.pkl') 
 
-        print(f'loading refer dataset for {obj_name}')
-        obj_refer_dataset = datasetLoader(data_root, obj_name, 
-                                          subset_mode='train', 
-                                          num_refer_views=num_refer_views,
-                                          use_binarized_mask=CFG.BINARIZE_MASK,
-                                          obj_database_dir=obj_refer_database_dir)  
-        
-        print(f'loading query dataset for {obj_name}')
+        print(f'loading test dataset for {obj_name}')
         obj_output_pose_dir = os.path.join(outpose_dir, obj_name)
         obj_test_dataset = datasetLoader(data_root, obj_name, subset_mode='test', 
                                          obj_database_dir=obj_refer_database_dir, 
                                          load_yolo_det=CFG.USE_YOLO_BBOX)
-        
-        if not os.path.exists(os.path.join(obj_refer_database_dir, 'object_reference_database.pkl')):
-            print(f'preprocess reference data for {obj_name}')
-            ref_database = create_reference_database_from_RGB_images(model_net, obj_refer_dataset, 
-                                                                     device=device, save_pred_mask=True)
-            # Save dictionary to a file
-            for _key, _val in ref_database.items():
-                ref_database[_key] = _val.detach().cpu().numpy()
-            
-            with open(obj_ref_database_path, 'wb') as df:
-                pickle.dump(ref_database, df)
-            print('save database to ', obj_ref_database_path)
 
-        if args.build_GS_model and (not os.path.exists(os.path.join(obj_refer_database_dir, 'point_cloud/iteration_30000/point_cloud.ply'))):
+        if not os.path.exists(obj_ref_database_path):
+            print(f'preprocess reference data for {obj_name}')
+            obj_refer_dataset = datasetLoader(data_root, obj_name, 
+                                            subset_mode='train', 
+                                            num_refer_views=num_refer_views,
+                                            use_binarized_mask=CFG.BINARIZE_MASK,
+                                            obj_database_dir=obj_refer_database_dir)  
+            ref_database = create_reference_database_from_RGB_images(model_net, obj_refer_dataset, device=device, save_pred_mask=True)
+            ref_database['obj_bbox3D'] = torch.as_tensor(obj_refer_dataset.obj_bbox3d, dtype=torch.float32)
+            ref_database['bbox3d_diameter'] = torch.as_tensor(obj_refer_dataset.bbox3d_diameter, dtype=torch.float32)
             print(f'building the 3D Gaussian model for {obj_name}')
             gs_pipeData  = gaussian_PipeP.extract(args)
             gs_modelData = gaussian_ModelP.extract(args)
@@ -1097,14 +1322,29 @@ if __name__ == "__main__":
             gs_modelData.referloader = obj_refer_dataset
             gs_modelData.queryloader = obj_test_dataset
 
-            build_3DGaussianObject(gs_modelData, gs_optimData, gs_pipeData,
+            create_3D_Gaussian_object(gs_modelData, gs_optimData, gs_pipeData,
                                     args.test_iterations, args.save_iterations,
                                     args.checkpoint_iterations, args.start_checkpoint, args.debug_from)
+
+            ref_database['obj_gaussians_path'] = f'{obj_refer_database_dir}/3DGO_model.ply'
+            # Save dictionary to a file
+            for _key, _val in ref_database.items():
+                if isinstance(_val, torch.Tensor):
+                    ref_database[_key] = _val.detach().cpu().numpy()
+            
+            with open(obj_ref_database_path, 'wb') as df:
+                pickle.dump(ref_database, df)
+            print('save database to ', obj_ref_database_path)
         
+        else:
+            print('load database from ', obj_ref_database_path)
+            with open(obj_ref_database_path, 'rb') as df:
+                ref_database = pickle.load(df)
+    
         print(f'performing the pose estimation for {obj_name}')
-        obj_result = eval_CoSegPose(model_net,
+        obj_result = eval_GSPose_with_database(model_net,
                                     obj_test_dataset, 
-                                    ref_database_dir=obj_refer_database_dir, 
+                                    reference_database=ref_database,
                                     output_pose_dir=obj_output_pose_dir, save_pred_mask=True)
         
         for _key, _val in obj_result.items():

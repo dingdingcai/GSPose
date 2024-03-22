@@ -160,7 +160,12 @@ cython_debug/
 #.idea/
 
 
-database
+*database
+demo_data
 *.pth
 *.mp4
 *.MP4
+checkpoints
+dataspace
+notebook/*.png
+dataspace

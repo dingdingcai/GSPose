@@ -19,7 +19,7 @@ import numpy as np
 from PIL import Image
 from pathlib import Path
 from typing import NamedTuple
-from plyfile import PlyData, PlyElement
+# from plyfile import PlyData, PlyElement
 from pytorch3d import transforms as py3d_transform
 
 
@@ -73,30 +73,30 @@ def getNerfppNorm(cam_info):
 
     return {"translate": translate, "radius": radius}
 
-def fetchPly(path):
-    plydata = PlyData.read(path)
-    vertices = plydata['vertex']
-    positions = np.vstack([vertices['x'], vertices['y'], vertices['z']]).T
-    colors = np.vstack([vertices['red'], vertices['green'], vertices['blue']]).T / 255.0
-    normals = np.vstack([vertices['nx'], vertices['ny'], vertices['nz']]).T
-    return BasicPointCloud(points=positions, colors=colors, normals=normals)
+# def fetchPly(path):
+#     plydata = PlyData.read(path)
+#     vertices = plydata['vertex']
+#     positions = np.vstack([vertices['x'], vertices['y'], vertices['z']]).T
+#     colors = np.vstack([vertices['red'], vertices['green'], vertices['blue']]).T / 255.0
+#     normals = np.vstack([vertices['nx'], vertices['ny'], vertices['nz']]).T
+#     return BasicPointCloud(points=positions, colors=colors, normals=normals)
 
-def storePly(path, xyz, rgb):
-    # Define the dtype for the structured array
-    dtype = [('x', 'f4'), ('y', 'f4'), ('z', 'f4'),
-            ('nx', 'f4'), ('ny', 'f4'), ('nz', 'f4'),
-            ('red', 'u1'), ('green', 'u1'), ('blue', 'u1')]
+# def storePly(path, xyz, rgb):
+#     # Define the dtype for the structured array
+#     dtype = [('x', 'f4'), ('y', 'f4'), ('z', 'f4'),
+#             ('nx', 'f4'), ('ny', 'f4'), ('nz', 'f4'),
+#             ('red', 'u1'), ('green', 'u1'), ('blue', 'u1')]
     
-    normals = np.zeros_like(xyz)
+#     normals = np.zeros_like(xyz)
 
-    elements = np.empty(xyz.shape[0], dtype=dtype)
-    attributes = np.concatenate((xyz, normals, rgb), axis=1)
-    elements[:] = list(map(tuple, attributes))
+#     elements = np.empty(xyz.shape[0], dtype=dtype)
+#     attributes = np.concatenate((xyz, normals, rgb), axis=1)
+#     elements[:] = list(map(tuple, attributes))
 
-    # Create the PlyData object and write to file
-    vertex_element = PlyElement.describe(elements, 'vertex')
-    ply_data = PlyData([vertex_element])
-    ply_data.write(path)
+#     # Create the PlyData object and write to file
+#     vertex_element = PlyElement.describe(elements, 'vertex')
+#     ply_data = PlyData([vertex_element])
+#     ply_data.write(path)
 
 def readCameras(dataloader, zoom_scale=512, margin=0.0, frame_sample_interval=1):
     cam_infos = []
@@ -106,16 +106,21 @@ def readCameras(dataloader, zoom_scale=512, margin=0.0, frame_sample_interval=1)
         if frame_idx % frame_sample_interval != 0:
             continue
         obj_data = dataloader[frame_idx]
-        image_path = obj_data['image_path']
-        mask_path = obj_data['coseg_mask_path']
-        image_name = os.path.basename(image_path)
-
         camK = np.array(obj_data['camK'])        
         pose = np.array(obj_data['pose'])
         R = np.transpose(pose[:3,:3])  # R is stored transposed due to 'glm' in CUDA code
         T = pose[:3, 3]
 
-        image = Image.open(image_path)
+        if 'image_path' not in obj_data:
+            image_path = None
+            image = (obj_data['image'] * 255).numpy()
+            image = Image.fromarray(image.astype(np.uint8))
+            image_name = f'{frame_idx}.png'
+        else:
+            image_path = obj_data['image_path']
+            image = Image.open(image_path)
+            image_name = os.path.basename(image_path)
+            
         image = torch.from_numpy(np.array(image))
         raw_height, raw_width = image.shape[:2]
 
@@ -123,41 +128,32 @@ def readCameras(dataloader, zoom_scale=512, margin=0.0, frame_sample_interval=1)
                                             radius=bbox3d_diameter/2, 
                                             margin=margin, target_size=zoom_scale)
         image = out['zoom_image'].squeeze()
+        height, width = image.shape[:2]
 
-        if os.path.exists(mask_path):
-            mask = Image.open(mask_path)
-        else:
-            mask = np.ones((raw_height, raw_width), dtype=np.uint8) * 255.0
-            mask = Image.fromarray(mask)
-        
-        mask = torch.from_numpy(np.array(mask))
-        mask = gs_utils.zoom_in_and_crop_with_offset(mask, t=T, K=camK, 
-                                            radius=bbox3d_diameter/2, 
-                                            margin=margin, 
-                                            target_size=zoom_scale,
-                                            )['zoom_image']
-        mask = mask.squeeze() / 255.0
-        if use_binarized_mask:
-            mask = mask.round()
-
-        if mask.dim() == 2:
-            mask = mask[:, :, None]
+        # if 'coseg_mask_path' not in obj_data:
+            # mask = np.ones((height, width, 1), dtype=np.float32)
+        try:
+            mask = Image.open(obj_data['coseg_mask_path'])
+            mask = torch.from_numpy(np.array(mask, dtype=np.float32)) / 255.0
+            mask = gs_utils.zoom_in_and_crop_with_offset(
+                mask, t=T, K=camK, radius=bbox3d_diameter/2, 
+                margin=margin, target_size=zoom_scale
+            )['zoom_image'].squeeze()
+            if mask.dim() == 2:
+                mask = mask[:, :, None]
+            if use_binarized_mask:
+                mask = mask.round()
+        except Exception as e:
+            print(e)
+            mask = np.ones((height, width, 1), dtype=np.float32)
         
         image = (image * mask).type(torch.uint8).numpy()
-
-        # print(image.shape, mask.shape, image.min(), image.max(), mask.min(), mask.max())
-        # segment the image
-        # segment_path = mask_path.replace('.png', '_RGB_segment.png')
-        # print(segment_path)
-        # cv2.imwrite(segment_path, image.astype(np.uint8))
+        image = Image.fromarray(image.astype(np.uint8))
 
         zoom_camk = out['zoom_camK'].squeeze().numpy()
         zoom_offset = out['zoom_offset'].squeeze().numpy()
         cx_offset = zoom_offset[0]
         cy_offset = zoom_offset[1]
-        image = Image.fromarray(image.astype(np.uint8))
-        width = image.size[0]
-        height = image.size[1]
         cam_fx = zoom_camk[0, 0]
         cam_fy = zoom_camk[1, 1]
         FovX = focal2fov(cam_fx, width)
@@ -180,7 +176,8 @@ def readObjectInfo(train_dataset, test_dataset, model_path, num_points=4096, zoo
     print(f"{num_training_samples} training samples")
     print(f"-----------------------------------------")
 
-    test_cam_infos = readCameras(test_dataset, zoom_scale=zoom_scale, margin=margin, frame_sample_interval=300)
+    test_interval = len(test_dataset) // 3
+    test_cam_infos = readCameras(test_dataset, zoom_scale=zoom_scale, margin=margin, frame_sample_interval=test_interval)
     num_test_samples = len(test_cam_infos)
     print(f"{num_test_samples} testing samples")
     print(f"----------------------------------------")
@@ -207,24 +204,24 @@ def readObjectInfo(train_dataset, test_dataset, model_path, num_points=4096, zoo
         shs = np.random.random((num_pts, 3)) / 255.0
         pcd = BasicPointCloud(points=xyz, colors=SH2RGB(shs), normals=np.zeros((num_pts, 3)))
 
-        storePly(ply_path, xyz, SH2RGB(shs) * 255)
+        # storePly(ply_path, xyz, SH2RGB(shs) * 255)
     
     if random_points3D:
         # Since this data set has no colmap data, we start with random points
-        num_pts = 100_000
-        print(f"Generating random point cloud ({num_pts})...")
+        # num_pts = 100_000
+        print(f"Generating random point cloud ({num_points})...")
         
         # We create random points inside the bounds of the synthetic Blender scenes
-        xyz = np.random.random((num_pts, 3)) #* 2.6 - 1.3
-        shs = np.random.random((num_pts, 3)) #/ 255.0
-        pcd = BasicPointCloud(points=xyz, colors=SH2RGB(shs), normals=np.zeros((num_pts, 3)))
+        xyz = np.random.random((num_points, 3)) #* 2.6 - 1.3
+        shs = np.random.random((num_points, 3)) #/ 255.0
+        pcd = BasicPointCloud(points=xyz, colors=SH2RGB(shs), normals=np.zeros((num_points, 3)))
 
-        storePly(ply_path, xyz, SH2RGB(shs) * 255)
+        # storePly(ply_path, xyz, SH2RGB(shs) * 255)
     
-    try:
-        pcd = fetchPly(ply_path)
-    except:
-        pcd = None
+    # try:
+    #     pcd = fetchPly(ply_path)
+    # except:
+    #     pcd = None
 
     object_info = SceneInfo(point_cloud=pcd,
                            train_cameras=train_cam_infos,
@@ -232,11 +229,6 @@ def readObjectInfo(train_dataset, test_dataset, model_path, num_points=4096, zoo
                            nerf_normalization=nerf_normalization,
                            ply_path=ply_path)
     return object_info
-
-# sceneLoadTypeCallbacks = {
-#     "readObjectInfo": readObjectInfo,
-# }
-
 
 
 

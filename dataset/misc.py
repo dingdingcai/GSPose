@@ -14,7 +14,7 @@ from pytorch3d.transforms import euler_angles_to_matrix
 import os
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from misc_utils import gdr_utils
+from misc_utils import gs_utils
 
 def get_dir(src_point, rot_rad):
     sn, cs = np.sin(rot_rad), np.cos(rot_rad)
@@ -794,7 +794,7 @@ def flat_dataset_dicts_with_allo_pose(dataset_dicts, min_amount_of_instances=100
             visib_fract = anno['visib_fract']
             pose = anno['pose']
             allo_pose = pose.copy()
-            allo_pose[:3, :3] = gdr_utils.egocentric_to_allocentric(pose)[:3, :3]
+            allo_pose[:3, :3] = gs_utils.egocentric_to_allocentric(pose)[:3, :3]
 
             if visib_fract_threshold is not None and visib_fract < visib_fract_threshold:
                 continue
@@ -866,143 +866,8 @@ def read_text_data(file, delimiter=' '):
     data = np.stack(data, axis=0)
     return data
 
-def find_largest_connected_component(mask):
-    # Perform connected component labeling
-    _, labels = cv2.connectedComponents(mask)
 
-    # Count pixels in each label
-    counts = np.bincount(labels.flat)
-
-    # Find label of largest connected component
-    largest_label = np.argmax(counts[1:]) + 1
-
-    # Create new binary mask with only largest connected component
-    largest_mask = np.zeros_like(mask)
-    largest_mask[labels == largest_label] = 1
-
-    # Apply new mask to original image
-    result = cv2.bitwise_and(mask, largest_mask)
-    return result
-
-def find_connected_component(mask, return_bbox=True, min_pixel_threshold=10, padding=1):    
-    if isinstance(mask, torch.Tensor):
-        mask = mask.numpy()
-    assert(mask.ndim == 2), 'mask: {}'.format(mask.shape)
-    
-    _, area_labels = cv2.connectedComponents(mask)
-
-    area_labels = torch.as_tensor(area_labels)
-    
-    pix_counts = torch.bincount(area_labels.flatten())[1:]
-    area_pixs, area_inds = torch.topk(pix_counts, k=len(pix_counts), dim=0)
-
-    valid_area_ind = area_pixs > min_pixel_threshold
-    while sum(valid_area_ind) == 0:
-        min_pixel_threshold = min_pixel_threshold - 1
-        valid_area_ind = area_pixs > min_pixel_threshold
-
-#     area_pixs = area_pixs[valid_area_ind]
-    area_labs = area_inds[valid_area_ind] + 1
-
-    label_masks = torch.zeros(len(area_labs), *mask.shape) + area_labs[:, None, None]
-    binary_masks = label_masks == area_labels[None, ...]
-    
-    if return_bbox:
-        # det_bboxes = list()
-        det_scales = list()
-        det_centers = list()
-        for bin_mask in binary_masks:
-            y1, x1 = torch.nonzero(bin_mask).min(0).values
-            y2, x2 = torch.nonzero(bin_mask).max(0).values
-            box_scale = max(x2 - x1, y2 - y1)
-            box_center = torch.as_tensor([(x2 + x1)/2.0, (y2 + y1)/2.0])
-            det_scales.append(box_scale)
-            det_centers.append(box_center)
-
-            # pd_bbox = torch.as_tensor([
-            #     box_center[0] - box_scale / 2.0,
-            #     box_center[1] - box_scale / 2.0,
-            #     box_center[0] + box_scale / 2.0,
-            #     box_center[1] + box_scale / 2.0,
-            # ])
-            # det_bboxes.append(pd_bbox)
-        
-        # det_bboxes = torch.stack(det_bboxes, dim=0)
-        det_scales = torch.stack(det_scales, dim=0)
-        det_centers = torch.stack(det_centers, dim=0)
-        return binary_masks, det_scales, det_centers
-    
-    return binary_masks
-
-
-def old_torch_find_connected_component(mask, return_bbox=True, min_pixel_threshold=1): 
-    try:
-        from cc_torch import connected_components_labeling 
-        assert(isinstance(mask, torch.Tensor))
-        assert(mask.ndim == 2), 'mask: {}'.format(mask.shape)
-        hei, wid = mask.shape
-        pad_hei = hei
-        pad_wid = wid
-        if pad_hei % 2 == 1:
-            pad_hei += 1
-        if pad_wid % 2 == 1:
-            pad_wid += 1
-        pad_mask = torch.zeros(pad_hei, pad_wid, dtype=mask.dtype, device=mask.device)
-        pad_mask[:hei, :wid] = mask
-        area_labels = connected_components_labeling(pad_mask)
-        area_labs = area_labels.unique()[1:]
-        num_areas = area_labs.size(0)
-        binary_masks = area_labels[None, :, :].repeat(num_areas, 1, 1) == area_labs[:, None, None]
-        area_pixs = binary_masks.view(num_areas, -1).sum(dim=1)
-        valid_area_ind = area_pixs > min_pixel_threshold
-
-        while sum(valid_area_ind) == 0:
-            min_pixel_threshold = min_pixel_threshold - 1
-            valid_area_ind = area_pixs > min_pixel_threshold
-            
-        area_labs = area_labs[valid_area_ind]
-        binary_masks = binary_masks[valid_area_ind][:, :hei, :wid]
-    except Exception as e:
-        type_cast = False
-        if isinstance(mask, torch.Tensor):
-            device = mask.device
-            mask = mask.detach().cpu().numpy()
-            type_cast = True
-        print(e)
-        print('using the cv2.connectedComponents from opencv')
-        _, area_labels = cv2.connectedComponents(mask)[1]
-        area_labels = torch.as_tensor(area_labels)
-        pix_counts = torch.bincount(area_labels.flatten())[1:]
-        area_pixs, area_inds = torch.topk(pix_counts, k=len(pix_counts), dim=0)
-
-        valid_area_ind = area_pixs > min_pixel_threshold
-        while sum(valid_area_ind) == 0:
-            min_pixel_threshold = min_pixel_threshold - 1
-            valid_area_ind = area_pixs > min_pixel_threshold
-        area_labs = area_inds[valid_area_ind] + 1
-        label_masks = torch.zeros(len(area_labs), *mask.shape) + area_labs[:, None, None]
-        binary_masks = label_masks == area_labels[None, ...]
-        if type_cast:
-            binary_masks = torch.as_tensor(binary_masks, device=device)
-
-    if return_bbox:
-        det_scales = list()
-        det_centers = list()
-        for bin_mask in binary_masks:
-            y1, x1 = torch.nonzero(bin_mask).min(0).values
-            y2, x2 = torch.nonzero(bin_mask).max(0).values
-            box_scale = max(x2 - x1, y2 - y1)
-            box_center = torch.as_tensor([(x2 + x1)/2.0, (y2 + y1)/2.0])
-            det_scales.append(box_scale)
-            det_centers.append(box_center.to(box_scale.device))
-        det_scales = torch.stack(det_scales, dim=0).type(torch.float32)
-        det_centers = torch.stack(det_centers, dim=0).type(torch.float32)
-        return binary_masks, det_scales, det_centers
-    
-    return binary_masks
-
-
-def torch_find_connected_component(mask, return_bbox=True, min_pixel_threshold=1, include_supmask=True): 
+def torch_find_connected_component(mask, return_bbox=True, min_bbox_scale=14, min_pixel_threshold=1, include_supmask=True): 
     try:
         from cc_torch import connected_components_labeling 
         assert(isinstance(mask, torch.Tensor))
@@ -1024,10 +889,10 @@ def torch_find_connected_component(mask, return_bbox=True, min_pixel_threshold=1
         else:
             binary_masks = area_labels[None, :, :].repeat(num_areas, 1, 1) == area_labs[:, None, None]
             area_pixs = binary_masks.view(num_areas, -1).sum(dim=1)
-            valid_area_ind = area_pixs > min_pixel_threshold
+            valid_area_ind = area_pixs > min_bbox_scale**2
             while sum(valid_area_ind) == 0:
-                min_pixel_threshold = min_pixel_threshold - 1
-                valid_area_ind = area_pixs > min_pixel_threshold
+                min_bbox_scale = min_bbox_scale - 1
+                valid_area_ind = area_pixs > min_bbox_scale**2
             area_labs = area_labs[valid_area_ind]
             binary_masks = binary_masks[valid_area_ind][:, :hei, :wid]
             binary_masks[0] = mask # replace the background with the orginal mask
@@ -1049,10 +914,10 @@ def torch_find_connected_component(mask, return_bbox=True, min_pixel_threshold=1
         if len(area_inds) <= 2: # bg + fg
             binary_masks = mask[None, :, :]
         else:
-            valid_area_ind = area_pixs > min_pixel_threshold
+            valid_area_ind = area_pixs > min_bbox_scale**2
             while sum(valid_area_ind) == 0:
-                min_pixel_threshold = min_pixel_threshold - 1
-                valid_area_ind = area_pixs > min_pixel_threshold
+                min_bbox_scale = min_bbox_scale - 1
+                valid_area_ind = area_pixs > min_bbox_scale**2
             area_labs = area_inds[valid_area_ind]
             label_masks = torch.zeros(len(area_labs), *mask.shape) + area_labs[:, None, None]
             binary_masks = label_masks == area_labels[None, ...]
@@ -1065,16 +930,21 @@ def torch_find_connected_component(mask, return_bbox=True, min_pixel_threshold=1
     if return_bbox:
         det_scales = list()
         det_centers = list()
+        det_masks = list()
         for bin_mask in binary_masks:
             y1, x1 = torch.nonzero(bin_mask).min(0).values
             y2, x2 = torch.nonzero(bin_mask).max(0).values
-            box_scale = max(x2 - x1, y2 - y1)
             box_center = torch.as_tensor([(x2 + x1)/2.0, (y2 + y1)/2.0])
-            det_scales.append(box_scale)
-            det_centers.append(box_center.to(box_scale.device))
+            box_scale = max(x2 - x1, y2 - y1)
+            if box_scale > min_bbox_scale:
+                det_masks.append(bin_mask)
+                det_scales.append(box_scale)
+                det_centers.append(box_center.to(box_scale.device))
+        det_masks = torch.stack(det_masks, dim=0).type(torch.float32)
         det_scales = torch.stack(det_scales, dim=0).type(torch.float32)
         det_centers = torch.stack(det_centers, dim=0).type(torch.float32)
-        return binary_masks, det_scales, det_centers
+        
+        return det_masks, det_scales, det_centers
     
     return binary_masks
 
@@ -1150,48 +1020,6 @@ def bboxes_to_grid(boxes, in_size, out_size):
         grids[i, :, :, :] = bbox_to_grid(box, in_size, out_size)
 
     return grids
-
-
-# def zoom_and_crop(image, K, t, diameter, target_size=224, margin=0, return_canonical_tz=False, mode='bilinear'):
-# #     assert(K.dim() == 2 and t.dim() == 1), "{}, {}".format(K.shape, t.shape)
-    
-#     if K.dim() == 2:
-#         K = K[None, :, :]
-#     if t.dim() == 1:
-#         t = t[None, :]
-#     if image.dim() == 3:
-#         image = image[None, ...]
-#     if image.shape[3] == 3:
-#         image = image.permute(0, 3, 1, 2)
-    
-#     cam_focal = K[:, :2, :2].max()
-#     obj_tz = t[:, 2]
-    
-    
-#     bbox_scale = (1 + margin) * cam_focal * diameter / obj_tz 
-    
-#     uvs = torch.einsum('nij,nj->ni', K, t)
-#     uvs = uvs[:, :2] / uvs[:, 2:3]
-    
-#     bboxes = torch.zeros(len(uvs), 4)
-#     bboxes[:, 0] = (uvs[:, 0] - bbox_scale / 2)
-#     bboxes[:, 1] = (uvs[:, 1] - bbox_scale / 2)
-#     bboxes[:, 2] = (uvs[:, 0] + bbox_scale / 2)
-#     bboxes[:, 3] = (uvs[:, 1] + bbox_scale / 2)
-
-#     img_hei, img_wid = image.shape[-2:]
-#     in_size = torch.tensor((img_hei, img_wid))
-#     out_size = torch.tensor((target_size, target_size))
-#     grids = bboxes_to_grid(bboxes, in_size, out_size)
-
-#     image_new = torch.nn.functional.grid_sample(image.type(torch.float32), 
-#                                                 grids.type(torch.float32), 
-#                                                 mode=mode, align_corners=True)
-#     if return_canonical_tz:
-#         ref_delta_tz = (1 + margin) * cam_focal * diameter / target_size
-#         return image_new, ref_delta_tz
-#     return image_new
-
 
 def zoom_and_crop(image, K, t, radius, target_size=224, margin=0, return_canonical_tz=False, mode='bilinear'):
     
