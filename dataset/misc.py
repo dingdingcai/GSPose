@@ -535,8 +535,6 @@ def rotation_from_Allo2Ego(obj_ray, cam_ray=torch.tensor([0.0, 0.0, 1.0])):
         Rc = Rc.squeeze(0)
     return Rc
 
-
-
 def inplane_augmentation(img, mask=None):
     Rz_index = torch.randperm(4)[0] # 0:0˚, 1:90˚, 2:180˚, 3:270˚
     Rz_rad = torch.tensor([0.0, 0.0, math.pi * Rz_index * 0.5]) # 0˚, 90˚, 180˚, 270˚
@@ -581,7 +579,6 @@ def inplane_augmentation(img, mask=None):
         return Rz_img, Rz_mask, Rz_mat
     else:
         return Rz_img, Rz_mat
-
 
 def flat_dataset_dicts_objectwise(dataset_dicts, visib_fract_threshold=None, return_stats=False):
     """
@@ -670,7 +667,6 @@ def flat_dataset_dicts_with_NN_viewpoint(dataset_dicts, visib_fract_threshold=No
         data_entry['inst_annos']['NN_viewpoints'] = covisib_viewpoint_inds.astype(np.float32).nonzero()[0]
     return object_lists, object_dicts
 
-
 def flat_dataset_dicts_with_viewpoint(dataset_dicts, min_amount_of_instances=1000, visib_fract_threshold=None):
     """
     flatten the dataset dicts of detectron2 format
@@ -720,7 +716,6 @@ def flat_dataset_dicts_with_viewpoint(dataset_dicts, min_amount_of_instances=100
             new_object_lists.append(entry)
 
     return new_object_lists, new_object_dicts
-
 
 def flat_dataset_dicts_with_pose(dataset_dicts, min_amount_of_instances=1000, visib_fract_threshold=None):
     """
@@ -830,7 +825,6 @@ def flat_dataset_dicts_with_allo_pose(dataset_dicts, min_amount_of_instances=100
     return new_object_lists, new_object_dicts
 
 
-
 def inplane_augment(R, return_degree=False):
     unsqueeze = False
     if R.dim() == 2:
@@ -849,7 +843,6 @@ def inplane_augment(R, return_degree=False):
         return R, Rz_mat, Rz_rad[-1] / torch.pi * 180
     return R, Rz_mat
 
-
 def read_text_data(file, delimiter=' '):
     assert(file.endswith('.txt')), f'{file} is not a .txt file'
     assert(delimiter == ' ' or 
@@ -866,8 +859,7 @@ def read_text_data(file, delimiter=' '):
     data = np.stack(data, axis=0)
     return data
 
-
-def torch_find_connected_component(mask, return_bbox=True, min_bbox_scale=14, min_pixel_threshold=1, include_supmask=True): 
+def torch_find_connected_component(mask, return_bbox=True, min_bbox_scale=14, include_supmask=True): 
     try:
         from cc_torch import connected_components_labeling 
         assert(isinstance(mask, torch.Tensor))

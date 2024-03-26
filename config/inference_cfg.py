@@ -8,18 +8,13 @@ query_shortside_scale = query_longside_scale * 3 // 4
 
 coarse_threshold = 0.05
 coarse_bbox_padding = 1.25
-
 finer_threshold = 0.5
 finer_bbox_padding = 1.25
-
 enable_fine_detection = True
 
 save_reference_mask = True
-
 #### configure for 3D-GS-Refiner  ####
 ROT_TOPK = 1   # single rotation proposal
-MIN_ROT_DEGREE_DIST = 30
-NUM_ROT_SAMPLING_BINS = 3
 
 WARMUP = 10
 END_LR = 1e-6
@@ -29,7 +24,6 @@ GS_RENDER_SIZE = 224
 EARLY_STOP_MIN_STEPS = 5
 EARLY_STOP_LOSS_GRAD_NORM = 1e-4
 
-USE_MSE = True
 USE_SSIM = True
 USE_MS_SSIM = True
 

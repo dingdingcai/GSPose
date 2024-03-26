@@ -1,4 +1,5 @@
 import os
+import cv2
 import torch
 import numpy as np
 import mediapy as media
@@ -8,8 +9,9 @@ from transforms3d import affines, quaternions
 from misc_utils import gs_utils
 
 class OnePoseCap_Dataset(torch.utils.data.Dataset):
-    def __init__(self, obj_data_dir, num_grid_points=4096, use_binarized_mask=False, obj_database_dir=None):
+    def __init__(self, obj_data_dir, num_grid_points=4096, extract_RGB=False, use_binarized_mask=False, obj_database_dir=None):
         
+        self.extract_RGB = extract_RGB
         self.obj_data_dir = obj_data_dir
         self.num_grid_points = num_grid_points
         self.obj_database_dir = obj_database_dir
@@ -28,7 +30,21 @@ class OnePoseCap_Dataset(torch.utils.data.Dataset):
             self.arkit_camKs = [row.strip() for row in cf.readlines() if len(row) > 0 and row[0] != '#']
         
         ### read the video
-        self.video_frames = media.read_video(self.arkit_video_path) # NxHxWx3    
+        if self.extract_RGB:
+            RGB_dir = os.path.join(self.obj_data_dir, 'RGB')
+            if not os.path.exists(RGB_dir):
+                os.makedirs(RGB_dir)
+                cap = cv2.VideoCapture(self.arkit_video_path)
+                index = 0
+                while True:
+                    ret, image = cap.read()
+                    if not ret:
+                        break
+                    cv2.imwrite(os.path.join(RGB_dir, f'{index}.png'), image)
+                    index += 1
+        else:
+            self.video_frames = media.read_video(self.arkit_video_path) # NxHxWx3    
+
         
         assert(len(self.arkit_poses) == len(self.arkit_camKs))
         
@@ -106,7 +122,10 @@ class OnePoseCap_Dataset(torch.utils.data.Dataset):
         allo_pose = self.allo_poses[idx]
         image_ID = self.image_IDs[idx]
 
-        image = np.array(self.video_frames[idx]) / 255.0
+        if self.extract_RGB:
+            image = cv2.imread(os.path.join(self.obj_data_dir, 'RGB', f'{image_ID}.png')) / 255.0
+        else:
+            image = np.array(self.video_frames[idx]) / 255.0
         
         data_dict['image_ID'] = image_ID
         data_dict['camK'] = torch.as_tensor(camK, dtype=torch.float32) 
@@ -136,10 +155,3 @@ class OnePoseCap_Dataset(torch.utils.data.Dataset):
             new_batch[key] = torch.stack(val, dim=0)
 
         return new_batch
-
-
-if __name__ == "__main__":
-    obj_refer_dataset = Demo_OnePoseCap_Dataset(obj_data_dir=refer_seq_dir, 
-                                            use_binarized_mask=CFG.BINARIZE_MASK,
-                                            obj_database_dir=obj_database_dir,
-                                           )

@@ -161,6 +161,7 @@ cython_debug/
 
 
 *database
+database*
 demo_data
 *.pth
 *.mp4
@@ -168,4 +169,5 @@ demo_data
 checkpoints
 dataspace
 notebook/*.png
+notebook/*.json
 dataspace

@@ -17,11 +17,9 @@ from argparse import ArgumentParser
 import torch.nn.functional as torch_F
 from torchvision.ops import roi_align
 from pytorch3d import ops as py3d_ops
-from pytorch3d import transforms as py3d_transform
-from pytorch_msssim import ssim, ms_ssim, SSIM, MS_SSIM
+from pytorch_msssim import SSIM, MS_SSIM
 
 L1Loss = torch.nn.L1Loss(reduction='mean')
-MSELoss = torch.nn.MSELoss(reduction='mean')
 SSIM_METRIC = SSIM(data_range=1, size_average=True, channel=3) # channel=1 for grayscale images
 MS_SSIM_METRIC = MS_SSIM(data_range=1, size_average=True, channel=3)
 
@@ -36,13 +34,6 @@ from model.network import model_arch as ModelNet
 from dataset.inference_datasets import datasetCallbacks
 from misc_utils.warmup_lr import CosineAnnealingWarmupRestarts
 
-# import original gaussian splatting modules
-# sub_module_dir = os.path.join(PROJ_ROOT, 'gaussian-splatting')
-# sub_module_dir = os.path.join('/home/dingding/Workspace/CDD/gaussian-splatting')
-
-# sys.path.append(sub_module_dir)
-
-# import the customized modules
 from gaussian_object.utils.graphics_utils import focal2fov
 from gaussian_object.gaussian_render import render as GS_Renderer
 from gaussian_object.cameras import Camera as GS_Camera
@@ -58,7 +49,9 @@ gaussian_BG = torch.zeros((3), device=device)
 
 model_net = ModelNet().to(device)
 ckpt_file = os.path.join(PROJ_ROOT, 'checkpoints/model_weights.pth')
-model_net.load_state_dict(torch.load(ckpt_file, map_location=device))
+
+ckpt_weight = torch.load(ckpt_file, map_location=device)
+model_net.load_state_dict(ckpt_weight)
 print('Pretrained weights are loaded from ', ckpt_file.split('/')[-1])
 model_net.eval()
 
@@ -70,8 +63,7 @@ def create_reference_database_from_RGB_images(model_func, obj_dataset, device, s
 
     obj_poses = torch.as_tensor(obj_poses, dtype=torch.float32).to(device)
     obj_matRs = obj_poses[:, :3, :3]
-    # obj_vecRs = obj_matRs[:, 2, :3]
-    obj_vecRs = py3d_transform.matrix_to_axis_angle(obj_matRs)
+    obj_vecRs = obj_matRs[:, 2, :3]
     fps_inds = py3d_ops.sample_farthest_points(
         obj_vecRs[None, :, :], K=CFG.refer_view_num, random_start_point=False)[1].squeeze(0)  # obtain the FPS indices
     ref_fps_images = list()
@@ -83,7 +75,6 @@ def create_reference_database_from_RGB_images(model_func, obj_dataset, device, s
         camK = datum['camK']      # 3x3
         image = datum['image']    # HxWx3
         pose = datum.get('allo_pose', datum['pose']) # 4x4
-        
         ref_fps_images.append(image)
         ref_fps_poses.append(pose)
         ref_fps_camKs.append(camK)
@@ -176,7 +167,7 @@ def create_reference_database_from_RGB_images(model_func, obj_dataset, device, s
         ref_database['refer_pred_masks'] = refer_pred_masks
 
     ref_database['obj_fps_inds'] = fps_inds
-    ref_database['obj_fps_images'] = zoom_fps_images
+    # ref_database['obj_fps_images'] = zoom_fps_images
 
     ref_database['obj_fps_feats'] = obj_fps_feats
     ref_database['obj_fps_masks'] = obj_fps_masks
@@ -307,7 +298,7 @@ def perform_segmentation_and_encoding(model_func, que_image, ref_database, devic
                 if CFG.cosim_topk > 0:
                     cosim_score = token_cosim.topk(dim=1, k=CFG.cosim_topk).values.mean(dim=-1).mean(dim=1) # KxLxN -> KxTxN -> KxN -> K
                 else:
-                    cosim_score = token_cosim.mean(dim=-1).sum(dim=1) / (1 + roi_obj_mask.squeeze(-1).sum(dim=1))  # KxLxN -> KxL -> K
+                    cosim_score = token_cosim.mean(dim=-1).sum(dim=1) / (1 + roi_obj_mask.squeeze(-1).sum(dim=1))  # KxLxN -> KxL -> K 
                 
                 optim_index = cosim_score.argmax()
                 rgb_box_scale = fine_bbox_scales[optim_index]
@@ -475,24 +466,21 @@ def multiple_refine_pose_with_GS_refiner(obj_data, init_pose, gaussians, device)
         
         assert(image.dim() == 3 and image.shape[0] == 3), image.shape
 
-        trunc_mask = (image.sum(dim=0, keepdim=True) > 0).type(torch.float32) # 1xSxS        
-        target_img = (image * mask).to(device)
-
         gaussians.initialize_pose()
         optimizer = optim.AdamW([gaussians._delta_R, gaussians._delta_T], lr=CFG.START_LR)
         lr_scheduler = CosineAnnealingWarmupRestarts(optimizer, CFG.MAX_STEPS,
                                                     warmup_steps=CFG.WARMUP, 
                                                     max_lr=CFG.START_LR, 
                                                     min_lr=CFG.END_LR)
+        trunc_mask = (image.sum(dim=0, keepdim=True) > 0).type(torch.float32) # 1xSxS        
+        target_img = (image * mask).to(device)
         iter_losses = list()
         for iter_step in range(CFG.MAX_STEPS):
             render_img = GS_Renderer(init_camera, gaussians, gaussian_PipeP, gaussian_BG)['render'] * trunc_mask
             loss = 0.0
 
-            if CFG.USE_MSE:
-                loss += MSELoss(render_img, target_img).mean()
             if CFG.USE_SSIM:
-                loss  += (1 - SSIM_METRIC(render_img[None, ...], target_img[None, ...]))
+                loss += (1 - SSIM_METRIC(render_img[None, ...], target_img[None, ...]))
             if CFG.USE_MS_SSIM:
                 loss += (1 - MS_SSIM_METRIC(render_img[None, ...], target_img[None, ...]))
                 
@@ -570,11 +558,8 @@ def multiple_refine_pose_with_GS_refiner(obj_data, init_pose, gaussians, device)
                                             mode='bilinear', 
                                             align_corners=True).squeeze(0)
 
-    # trunc_mask = (image.sum(dim=0, keepdim=True) > 0).type(torch.float32) # 1xSxS        
-    # target_image = (image * mask).to(device)
-    
-    gs3d_refined_errors = list()
-    gs3d_refined_RTs = init_pose.copy() # Kx4x4
+    refined_errors = list()
+    refined_RTs = init_pose.copy() # Kx4x4
     for idx, init_RT in enumerate(init_pose):
         init_camera = GS_Camera(T=init_RT[:3, 3], R=init_RT[:3, :3].T,
                                 FoVx=que_zoom_FovX, FoVy=que_zoom_FovY,
@@ -584,20 +569,20 @@ def multiple_refine_pose_with_GS_refiner(obj_data, init_pose, gaussians, device)
         ret_outp = GS_Refiner(image=image, mask=mask, init_camera=init_camera, gaussians=gaussians, return_loss=True)
         gs3d_delta_RT = ret_outp['gs3d_delta_RT']
         refined_err = ret_outp['edge_err']
-        gs3d_refined_RTs[idx] = init_RT @ gs3d_delta_RT
-        gs3d_refined_errors.append(refined_err)
-    gs3d_refined_errors = torch.as_tensor(gs3d_refined_errors)
-    best_idx = gs3d_refined_errors.argmin().item()
-    gs3d_refined_RT = gs3d_refined_RTs[best_idx]
+        refined_RTs[idx] = init_RT @ gs3d_delta_RT
+        refined_errors.append(refined_err)
+    refined_errors = torch.as_tensor(refined_errors)
+    best_idx = refined_errors.argmin().item()
+    refined_RT = refined_RTs[best_idx]
 
     ret_outp['bbox_center'] = bbox_center
     ret_outp['bbox_scale'] = bbox_scale
-    ret_outp['gs3d_refined_RT'] = gs3d_refined_RT
+    ret_outp['refined_RT'] = refined_RT
 
     return ret_outp
 
 def eval_GSPose(model_func, obj_dataset, ref_database_dir, output_pose_dir=None, save_pred_mask=False):  
-    ref_database_path = os.path.join(ref_database_dir, 'reference_database.pkl')
+    ref_database_path = os.path.join(ref_database_dir, f'{obj_dataset.obj_name}_database.pkl')
     with open(ref_database_path, 'rb') as df:
         reference_database = pickle.load(df)
     for _key, _val in reference_database.items():
@@ -609,11 +594,6 @@ def eval_GSPose(model_func, obj_dataset, ref_database_dir, output_pose_dir=None,
         assert(ref_database_dir is not None)
         obj_gaussians = GaussianModel()
         gs_ply_path = os.path.join(ref_database_dir, '3DGO_model.ply')
-
-        # all_ply_dirs = glob.glob(os.path.join(f'{ref_database_dir}/point_cloud/iteration_*'))
-        # gs_ply_dir = sorted(all_ply_dirs, key=lambda x: int(x.split('_')[-1]), reverse=True)[0]
-        # gs_ply_path = f'{gs_ply_dir}/point_cloud.ply'
-
         obj_gaussians.load_ply(gs_ply_path)
         print('load 3D-OGS model from ', gs_ply_path)
     
@@ -734,7 +714,7 @@ def eval_GSPose(model_func, obj_dataset, ref_database_dir, output_pose_dir=None,
                 refiner_timer = time.time()
                 refiner_oupt = multiple_refine_pose_with_GS_refiner(obj_data, init_pose=init_RTs, gaussians=obj_gaussians, device=device)
                 
-                refine_RT = refiner_oupt['gs3d_refined_RT']
+                refine_RT = refiner_oupt['refined_RT']
                 refiner_cost = time.time() - refiner_timer
                 runtime_metrics['refiner_cost'].append(refiner_cost)
 
@@ -860,7 +840,6 @@ def eval_GSPose(model_func, obj_dataset, ref_database_dir, output_pose_dir=None,
     log_file_f.close()
     return {'init': init_results, 'refine': refine_results}
 
-
 def render_Gaussian_object_model(obj_gaussians, camK, pose, img_hei, img_wid, device): 
     if isinstance(pose, torch.Tensor):
         pose = pose.numpy()
@@ -879,7 +858,6 @@ def render_Gaussian_object_model(obj_gaussians, camK, pose, img_hei, img_wid, de
     render_img_np = (render_img_np * 255).astype(np.uint8)
     
     return render_img_np
-
 
 def GS_Tracker(model_func, ref_database, frame, camK, prev_pose):
     zoom_outp = gs_utils.zoom_in_and_crop_with_offset(image=frame, K=camK, 
@@ -1086,7 +1064,7 @@ def eval_GSPose_with_database(model_func, obj_dataset, reference_database, outpu
                 refiner_timer = time.time()
                 refiner_oupt = multiple_refine_pose_with_GS_refiner(obj_data, init_pose=init_RTs, gaussians=obj_gaussians, device=device)
                 
-                refine_RT = refiner_oupt['gs3d_refined_RT']
+                refine_RT = refiner_oupt['refined_RT']
                 refiner_cost = time.time() - refiner_timer
                 runtime_metrics['refiner_cost'].append(refiner_cost)
 
@@ -1173,7 +1151,7 @@ def eval_GSPose_with_database(model_func, obj_dataset, reference_database, outpu
                 refine_cost = np.array(runtime_metrics['refiner_cost']).mean()
             total_cost = det_cost + init_cost + refine_cost
             log_runtime = 'detector_cost: {:.4f}, initilizer_cost: {:.4f}, refiner_cost: {:.4f}, total_cost: {:.4f}'.format(det_cost, init_cost, refine_cost, total_cost)
-            print('[{}/{}], {}'.format(view_idx+1, num_que_views, log_runtime))
+            # print('[{}/{}], {}'.format(view_idx+1, num_que_views, log_runtime))
 
             log_file_f.write('[{}/{}], init=[{}], refine=[{}], {}, {}\n'.format(view_idx+1, num_que_views, init_log_str, refine_log_str, time_stamp, log_runtime))
             
@@ -1235,7 +1213,6 @@ if __name__ == "__main__":
     parser.add_argument("--start_checkpoint", type=str, default = None)
     
     ###### arguments for CoSegPose ########
-    parser.add_argument('--use_model_based', action='store_true', help='enable 3D GaussianObject model-based database reconstruction')
     parser.add_argument('--num_refer_views', type=int, default=-1)
     parser.add_argument('--dataset_name', default='LINEMOD', type=str, help='dataset name')
     parser.add_argument('--outpose_dir', default='output_pose', type=str, help='output pose directory')
@@ -1260,10 +1237,8 @@ if __name__ == "__main__":
 
     dataset_name = args.dataset_name
     num_refer_views = args.num_refer_views
-    enable_3DGO_model_based_database = args.use_model_based
 
-    output_dir = os.path.join(PROJ_ROOT, f'obj_database', dataset_name)
-    
+    output_dir = os.path.join(PROJ_ROOT, f'reference_database', dataset_name)
     outpose_dir = os.path.join(output_dir, args.outpose_dir + f'_{postfix}')
     database_dir = os.path.join(output_dir, args.database_dir + f'_{postfix}')
 
@@ -1293,7 +1268,7 @@ if __name__ == "__main__":
     summarized_results = dict()
     for obj_name, obj_dir_name in datasetObjects.items():
         obj_refer_database_dir = os.path.join(database_dir, obj_name)
-        obj_ref_database_path = os.path.join(obj_refer_database_dir, 'reference_database.pkl') 
+        obj_ref_database_path = os.path.join(obj_refer_database_dir, f'{obj_name}_database.pkl') 
 
         print(f'loading test dataset for {obj_name}')
         obj_output_pose_dir = os.path.join(outpose_dir, obj_name)
@@ -1380,25 +1355,8 @@ if __name__ == "__main__":
                 print(value_str) 
 
 """
-old_scale =
-{  'ape':          0.0974, # 0.1021
-    'benchvise':   0.2869, # 0.2475
-    'cam':         0.1716, # 0.1725
-    'can':         0.1934, # 0.2014
-    'cat':         0.1526, # 0.1545
-    'driller':     0.2594, # 
-    'duck':        0.1071,
-    'eggbox':      0.1764,
-    'glue':        0.1649,
-    'holepuncher': 0.1482,
-    'iron':        0.3032,
-    'lamp':        0.2852,
-    'phone':       0.2084,
-}
-
 python inference.py --dataset_name LINEMOD  --database_dir LM_database --outpose_dir LM_yolo_pose
 python inference.py --dataset_name LINEMOD_SUBSET  --database_dir LMSubSet_database --outpose_dir LMSubSet_pose
 python inference.py --dataset_name LOWTEXTUREVideo  --database_dir LTVideo_database --outpose_dir LTVideo_pose
-
 
 """

@@ -235,23 +235,29 @@ for iter_steps in range(1, max_steps+1):
             ckpt_name = 'model_{}_{}.pth'.format(iter_steps, time_stamp)
             ckpt_file = os.path.join(checkpoints, ckpt_name) 
             try:
-                state = {
-                    'model_net': model_net.module.state_dict(),
-                    'optimizer': optimizer.state_dict(),
-                    'lr_scheduler': lr_scheduler.state_dict(),
-                    'scaler': scaler.state_dict(),
-                    'iter_steps': iter_steps,
-                    }
-                torch.save(state, ckpt_file)
+               torch.save(model_net.module.state_dict(), ckpt_file)
             except:
-                state = {
-                    'model_net': model_net.state_dict(),
-                    'optimizer': optimizer.state_dict(),
-                    'lr_scheduler': lr_scheduler.state_dict(),
-                    'scaler': scaler.state_dict(),
-                    'iter_steps': iter_steps,
-                    }
-                torch.save(state, ckpt_file)
+               torch.save(model_net.state_dict(), ckpt_file)
+            
+            # try:
+            #     state = {
+            #         'model_net': model_net.module.state_dict(),
+            #         'optimizer': optimizer.state_dict(),
+            #         'lr_scheduler': lr_scheduler.state_dict(),
+            #         'scaler': scaler.state_dict(),
+            #         'iter_steps': iter_steps,
+            #         }
+            #     torch.save(state, ckpt_file)
+            # except:
+            #     state = {
+            #         'model_net': model_net.state_dict(),
+            #         'optimizer': optimizer.state_dict(),
+            #         'lr_scheduler': lr_scheduler.state_dict(),
+            #         'scaler': scaler.state_dict(),
+            #         'iter_steps': iter_steps,
+            #         }
+            #     torch.save(state, ckpt_file)
+            
             print('saving to ', ckpt_file)
 
  

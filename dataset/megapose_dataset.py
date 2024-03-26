@@ -16,10 +16,11 @@ sys.path.append(PROJ_ROOT)
 
 from dataset import misc
 from three import meshutils
-from misc_utils import gdr_utils
+from misc_utils import gs_utils
 
 logger = logging.getLogger(__name__)
 CUR_FILE_DIR = os.path.dirname(__file__)
+
 class MegaPose_Dataset(torch.utils.data.Dataset):
     def __init__(self, 
                  data_dir,
@@ -434,7 +435,7 @@ class MegaPose_Dataset(torch.utils.data.Dataset):
         obj_diameter = self.obj_diameters[obj_instID]/1000.0 # in meters
 
         allo_RT = obj_RT.copy()
-        allo_RT[:3, :3] = gdr_utils.egocentric_to_allocentric(allo_RT)[:3, :3]
+        allo_RT[:3, :3] = gs_utils.egocentric_to_allocentric(allo_RT)[:3, :3]
 
         image = np.array(mmcv.imread(dataset_dict['rgb_path'], 'color', self.COLOR_TYPE), dtype=np.uint8)
 
@@ -471,7 +472,7 @@ class MegaPose_Dataset(torch.utils.data.Dataset):
         obj_RT = inst_annos['pose'].astype(np.float32)
 
         allo_RT = obj_RT.copy()
-        allo_RT[:3, :3] = gdr_utils.egocentric_to_allocentric(allo_RT)[:3, :3]
+        allo_RT[:3, :3] = gs_utils.egocentric_to_allocentric(allo_RT)[:3, :3]
 
         bbox_mode = inst_annos['bbox_mode']
         rgb_path = dataset_dict['rgb_path']
