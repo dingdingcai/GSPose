@@ -123,7 +123,8 @@ class OnePoseCap_Dataset(torch.utils.data.Dataset):
         image_ID = self.image_IDs[idx]
 
         if self.extract_RGB:
-            image = cv2.imread(os.path.join(self.obj_data_dir, 'RGB', f'{image_ID}.png')) / 255.0
+            image = cv2.imread(os.path.join(self.obj_data_dir, 'RGB', f'{image_ID}.png'))
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB) / 255.0
         else:
             image = np.array(self.video_frames[idx]) / 255.0
         
