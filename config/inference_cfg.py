@@ -9,7 +9,7 @@ query_shortside_scale = query_longside_scale * 3 // 4
 coarse_threshold = 0.05
 coarse_bbox_padding = 1.25
 finer_threshold = 0.5
-finer_bbox_padding = 1.25
+finer_bbox_padding = 1.5
 enable_fine_detection = True
 
 save_reference_mask = True
