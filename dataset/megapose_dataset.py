@@ -72,50 +72,6 @@ class MegaPose_Dataset(torch.utils.data.Dataset):
         cache_name = 'megapose1050_gso1000'
         self.cache_dir = os.path.join(CUR_FILE_DIR, ".cache")  # .cache
 
-        self.obj_diameters = dict()
-        self.obj_pointclouds = dict()
-        self.obj_3D_bounding_boxes = dict()
-        
-        self.OBJ_IDs_to_NAMEs_DICT = dict()
-        self.OBJ_NAMEs_to_IDs_DICT = dict()
-        cad_model_dir = os.path.join(self.data_dir, 'models')
-        valid_mesh_names = mmcv.load(os.path.join(self.data_dir, 'valid_meshes.json'))
-        valid_mesh_info_path = os.path.join(self.data_dir, 'valid_meshes_diameters.json')
-        valid_mesh_bbox3D_path = os.path.join(self.data_dir, 'valid_meshes_3D_bboxes.json')
-
-        for obj_idx, obj_class_name in enumerate(valid_mesh_names):
-            self.OBJ_IDs_to_NAMEs_DICT[obj_idx] = obj_class_name
-            self.OBJ_NAMEs_to_IDs_DICT[obj_class_name] = obj_idx
-            if not os.path.exists(valid_mesh_info_path):
-                cad_model_path = os.path.join(cad_model_dir, obj_class_name, 'meshes/model.ply')
-                obj = meshutils.Object3D(cad_model_path)
-                self.obj_diameters[obj_idx] = obj.bounding_diameter
-
-            if not os.path.exists(valid_mesh_bbox3D_path):
-                cad_model_path = os.path.join(cad_model_dir, obj_class_name, 'meshes/model.ply')
-                obj = meshutils.Object3D(cad_model_path)
-                obj_pointclouds = obj.vertices
-                self.obj_3D_bounding_boxes[obj_idx] = np.stack([obj_pointclouds.min(0),
-                                                                obj_pointclouds.max(0)], axis=0)
-        if self.use_cache:
-            if not os.path.exists(valid_mesh_info_path):
-                mmcv.dump(self.obj_diameters, valid_mesh_info_path)
-                logger.info("Dumped obj_diameters to {}".format(valid_mesh_info_path))
-            else:
-                obj_diameters = mmcv.load(valid_mesh_info_path)
-                logger.info("load obj_diameters from {}".format(valid_mesh_info_path))
-                self.obj_diameters = {int(k): float(v) for k, v in obj_diameters.items()}
-            
-            if not os.path.exists(valid_mesh_bbox3D_path):
-                mmcv.dump(self.obj_3D_bounding_boxes, valid_mesh_bbox3D_path)
-                logger.info("Dumped obj_bbox3D to {}".format(valid_mesh_bbox3D_path))
-            else:
-                obj_3D_bounding_boxes = mmcv.load(valid_mesh_bbox3D_path)
-                logger.info("load obj_bbox3D from {}".format(valid_mesh_bbox3D_path))
-                self.obj_3D_bounding_boxes = {int(k): np.asarray(v) for k, v in obj_3D_bounding_boxes.items()}
-
-
-
         refer_hashed_file_name = hashlib.md5(
             "dataset_dicts_{}_{}".format(cache_name, self.dataset_name).encode("utf-8")
         ).hexdigest()
@@ -224,8 +180,7 @@ class MegaPose_Dataset(torch.utils.data.Dataset):
                     view_instance_counter = dict()
                     for inst_idx, inst_dat in enumerate(view_dat):
                         inst_objID = int(inst_dat['obj_id'])
-                        if inst_objID not in self.OBJ_IDs_to_NAMEs_DICT:
-                            continue
+
                         inst_R = np.array(inst_dat['cam_R_m2c'], dtype=np.float32).reshape(3, 3)
                         inst_t = np.array(inst_dat['cam_t_m2c'], dtype=np.float32).reshape(3)
 
@@ -324,10 +279,6 @@ class MegaPose_Dataset(torch.utils.data.Dataset):
                 idx = np.random.randint(0, len(self))
                 continue
         return dataset_dict
-    
-    # def __getitem__(self, idx):
-    #     dataset_dict = self.fetch_data(idx)
-    #     return dataset_dict
 
     def load_multiview_refer_data(self, inst_objID, indices, cam_dist_factor):
         dataset_dict = dict()
@@ -351,21 +302,21 @@ class MegaPose_Dataset(torch.utils.data.Dataset):
     def load_multiview_query_data(self, inst_objID, indices, cam_dist_factor):
         que_data_dict = dict()
         nnb_data_dict = dict()
+
+        obj_data = self.reference_dataset_dicts[inst_objID] # all samples of the object
+        obj_allo_Rs = torch.as_tensor(obj_data['allo_pose'][:, :3, :3], dtype=torch.float32)  # Nx3x3
+
         for sample_idx in indices:
-            obj_data = self.reference_dataset_dicts[inst_objID]
-
-            que_data = self.read_query_entry_data(obj_data['data'][sample_idx])
-
+            que_data = self.read_query_entry_data(obj_data['data'][sample_idx]) # current sample
             que_allo_R = que_data['allo_RT'][:3, :3]
-            obj_allo_Rs = torch.as_tensor(obj_data['allo_pose'][:, :3, :3], dtype=torch.float32)  # Nx3x3
-
+            
             Rtrace = torch.einsum('mij,jk->mik', obj_allo_Rs[:, :3, :3], que_allo_R[:3, :3].T)
             Rcosim = torch.einsum('mii->m', Rtrace) / 2.0 - 0.5
-            ranked_Rdist_vals, ranked_Rdist_inds = torch.topk(Rcosim, k=len(Rcosim), dim=0, largest=True)        
+            ranked_Rdist_vals, ranked_Rdist_inds = torch.topk(Rcosim, k=len(Rcosim), dim=0, largest=True) # in dsending order
             que_basin_R_threshold = torch.cos(torch.tensor(self.nnb_Rmat_threshold / 180 * torch.pi))
-            Rrad_within_basin = ranked_Rdist_vals >= que_basin_R_threshold # [1.0, -1.0]
+            Rrad_within_basin = ranked_Rdist_vals >= que_basin_R_threshold # nearest neighbors within the basin regarding the rotation
             nnb_Rinds = ranked_Rdist_inds[Rrad_within_basin]
-            random_ind = torch.randperm(len(nnb_Rinds))[0]
+            random_ind = torch.randperm(len(nnb_Rinds))[0] # randomly select one from the nearest neighbors
             
             selected_nnb_ind = nnb_Rinds[random_ind]
             nnb_data = obj_data['data'][selected_nnb_ind]
@@ -400,8 +351,7 @@ class MegaPose_Dataset(torch.utils.data.Dataset):
         inst_objID = self.reference_dataset_lists[idx]['inst_annos']['objID']
         obj_allo_Rs = self.reference_dataset_dicts[inst_objID]['allo_pose'][:, :3, :3]
         obj_allo_Rs = torch.as_tensor(obj_allo_Rs, dtype=torch.float32)  # Nx3x3
-        # obj_viewpoints = obj_allo_Rs[:, 2, :3] # Nx3
-        obj_viewpoints = py3d_transform.matrix_to_axis_angle(obj_allo_Rs) # Nx3x3 -> Nx3
+        obj_viewpoints = obj_allo_Rs[:, 2, :3] # Nx3
         camera_dist_factor = 1 + self.DZI_camera_dist_ratio * np.random.random_sample() # [1, 1.5]
 
         query_inds = py3d_ops.sample_farthest_points(
@@ -411,11 +361,13 @@ class MegaPose_Dataset(torch.utils.data.Dataset):
         dataset_dict['query_dict'] = query_dict
         dataset_dict['qnnb_dict'] = qnnb_dict
 
-        sample_inds = py3d_ops.sample_farthest_points(obj_viewpoints[None, ...], 
-                                                      K=self.refer_view_num + self.rand_view_num, 
+        ref_inds = py3d_ops.sample_farthest_points(obj_viewpoints[None, ...], 
+                                                      K=self.refer_view_num, 
                                                       random_start_point=True)[1].squeeze(0)
-        ref_inds = sample_inds[:self.refer_view_num]
-        rand_inds = sample_inds[self.refer_view_num:]
+        rand_inds = py3d_ops.sample_farthest_points(obj_viewpoints[None, ...], 
+                                                      K=self.rand_view_num,
+                                                      random_start_point=True)[1].squeeze(0)
+
 
         refer_dict = self.load_multiview_refer_data(inst_objID, ref_inds, camera_dist_factor)
         dataset_dict['refer_dict'] = refer_dict
@@ -432,8 +384,7 @@ class MegaPose_Dataset(torch.utils.data.Dataset):
         obj_instID = int(inst_annos['objID'])
         camK = dataset_dict['camK'].astype(np.float32)
         obj_RT = inst_annos['pose'].astype(np.float32)
-        obj_diameter = self.obj_diameters[obj_instID]/1000.0 # in meters
-
+        
         allo_RT = obj_RT.copy()
         allo_RT[:3, :3] = gs_utils.egocentric_to_allocentric(allo_RT)[:3, :3]
 
@@ -448,10 +399,11 @@ class MegaPose_Dataset(torch.utils.data.Dataset):
 
         camera_dist = cam_dist_factor * max(camK[0, 0], camK[1, 1]) / self.img_scale
 
-        scaled_T = obj_RT[:3, 3] / obj_diameter
-        obj_2D_center = camK @ scaled_T
-        zoom_bbox_center = obj_2D_center[:2] / obj_2D_center[2:3]  #
-        zoom_bbox_scale = camera_dist * self.img_scale / scaled_T[2]
+        bbox = inst_annos['bbox']
+        zoom_bbox_center, zoom_bbox_scale = misc.aug_bbox_DZI(
+            bbox, orig_hei, orig_wid, 
+            pad_ratio=self.DZI_PAD_RATIO,
+        )
 
         zoom_image = misc.crop_resize_by_warp_affine(
             image, zoom_bbox_center, zoom_bbox_scale, self.img_scale, interpolation=cv2.INTER_LINEAR)
@@ -642,6 +594,7 @@ class MegaPose_Dataset(torch.utils.data.Dataset):
             x = aug(x)
         x = np.asarray(x)
         return x
+
 
 if __name__ == '__main__':
 
