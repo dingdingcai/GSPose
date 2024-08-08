@@ -212,13 +212,11 @@ class model_arch(nn.Module):
         x_obj = F.grid_sample(x, center_coords.view(-1, 1, 1, 2), # BVrx1x1x2
                                     mode='bilinear', padding_mode='zeros', align_corners=True,
                                     ).view(dim_B, dim_Vr, -1) # BVrxCxSxS -> BxVrxC
-                
+        xpos = None
         if self.coseg_position_encoding is not None:
             x = self.coseg_position_encoding(x)
         elif self.rope is not None:
             xpos = self.position_getter(x.size(0), x.size(2), x.size(3), x.device) # BVrxLx2
-        else:
-            xpos = None
         
         x = x.flatten(2).transpose(-2, -1).contiguous()  # BVrxCx32x32 -> BVrxLxC
         xpos = xpos.reshape(dim_BVr, -1, xpos.shape[-1]) # BxVrLx2 -> BVrxLx2
@@ -254,16 +252,14 @@ class model_arch(nn.Module):
         x_que = self.coseg_aware_projection(x_que)
         dim_C = x_ref.shape[1]
         dim_B = self.batch_size
-
+        que_pos = None
+        ref_pos = None
         if self.coseg_position_encoding is not None:
             x_ref = self.coseg_position_encoding(x_ref)
             x_que = self.coseg_position_encoding(x_que)
         elif self.rope is not None:
             que_pos = self.position_getter(x_que.size(0), x_que.size(2), x_que.size(3), x_que.device) # BVqxMx2
             ref_pos = self.position_getter(x_ref.size(0), x_ref.size(2), x_ref.size(3), x_ref.device) # BVrxLx2
-        else:
-            que_pos = None
-            ref_pos = None
         
         if ref_mask.shape[-1] != x_ref.shape[-1]:
             ref_mask = F.interpolate(ref_mask, size=x_ref.shape[2:], mode='bilinear', align_corners=True)        
