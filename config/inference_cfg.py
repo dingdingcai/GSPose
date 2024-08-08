@@ -17,9 +17,9 @@ save_reference_mask = True
 ROT_TOPK = 1   # single rotation proposal
 
 WARMUP = 10
-END_LR = 1e-6
+END_LR = 0
 START_LR = 5e-3
-MAX_STEPS = 100
+MAX_STEPS = 400
 GS_RENDER_SIZE = 224
 EARLY_STOP_MIN_STEPS = 5
 EARLY_STOP_LOSS_GRAD_NORM = 1e-4
