@@ -1,4 +1,4 @@
-# GS-Pose: Cascaded Framework for Generalizable Segmentation-based 6D Object Pose Estimation 
+# GS-Pose: Generalizable Segmentation-Based 6D Object Pose Estimation With 3D Gaussian Splatting
 - [[Project Page](https://dingdingcai.github.io/gs-pose)]
 - [[Paper](https://arxiv.org/abs/2403.10683)]
 <p align="center">
@@ -8,7 +8,7 @@
 ``` Bash
 @inproceedings{cai_2024_GSPose,
     author    = {Cai, Dingding and Heikkil\"a, Janne and Rahtu, Esa},
-    title     = {GS-Pose: Cascaded Framework for Generalizable Segmentation-based 6D Object Pose Estimation},
+    title     = {GS-Pose: Generalizable Segmentation-Based 6D Object Pose Estimation With 3D Gaussian Splatting},
     journal   = {arXiv preprint arXiv:2403.10683},
     year      = {2024},
 }
